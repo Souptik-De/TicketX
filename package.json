@@ -1,0 +1,20 @@
+{
+  "name": "ticketx",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Event ticketing with QR validation for DSC3153 Sprint 1.",
+  "scripts": {
+    "dev": "concurrently \"python -m uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8000\" \"npm --workspace frontend run dev\"",
+    "test": "python -m pytest backend/tests && npm --workspace frontend run build",
+    "frontend:dev": "npm --workspace frontend run dev",
+    "frontend:build": "npm --workspace frontend run build",
+    "backend:dev": "python -m uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8000",
+    "backend:test": "python -m pytest backend/tests"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  },
+  "workspaces": [
+    "frontend"
+  ]
+}

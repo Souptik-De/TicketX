@@ -1,0 +1,60 @@
+const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "/api";
+let authToken = localStorage.getItem("ticketx-token") ?? "";
+
+export function setAuthToken(token) {
+  authToken = token;
+  if (token) {
+    localStorage.setItem("ticketx-token", token);
+  } else {
+    localStorage.removeItem("ticketx-token");
+  }
+}
+
+async function request(path, options) {
+  const authHeaders = authToken ? { Authorization: `Bearer ${authToken}` } : {};
+  const response = await fetch(`${API_BASE}${path}`, {
+    ...options,
+    headers: { "Content-Type": "application/json", ...authHeaders, ...options?.headers },
+  });
+
+  if (!response.ok) {
+    const problem = await response.json().catch(() => ({ detail: "Request failed" }));
+    throw new Error(problem.detail ?? "Request failed");
+  }
+
+  return response.json();
+}
+
+export function login(payload) {
+  return request("/auth/login", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function getEvents() {
+  return request("/events");
+}
+
+export function getGates(eventId) {
+  const query = eventId ? `?event_id=${eventId}` : "";
+  return request(`/gates${query}`);
+}
+
+export function createEvent(payload) {
+  return request("/events", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function createGate(payload) {
+  return request("/gates", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function getVolunteers() {
+  return request("/volunteers");
+}
