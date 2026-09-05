@@ -76,3 +76,8 @@ export function scanTicket(payload) {
     body: JSON.stringify(payload),
   });
 }
+
+export function getGateStatus(eventId) {
+  const query = eventId ? `?event_id=${eventId}` : "";
+  return request(`/gates/status${query}`);
+}

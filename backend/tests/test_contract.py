@@ -474,3 +474,111 @@ def test_valid_scan_then_duplicate_scan() -> None:
         duplicate_scans = [s for s in scans if s.result == "duplicate"]
         assert len(valid_scans) == 1
         assert len(duplicate_scans) == 1
+
+
+def test_gate_status_counts_valid_scans_only() -> None:
+    reset_database()
+    client = TestClient(app)
+    user_headers = auth_headers(client, "attendee", "attendee123")
+    scanner_headers = auth_headers(client, "scanner", "scanner123")
+    ticket = client.post(
+        "/tickets",
+        json={"event_id": 1, "attendee_name": "Riya Sen", "attendee_contact": "riya@example.edu"},
+        headers=user_headers,
+    ).json()
+
+    # Initial gate status: 0 valid scans and last_synced is None
+    initial_res = client.get("/gates/status", headers=scanner_headers)
+    assert initial_res.status_code == 200
+    initial_gates = initial_res.json()
+    initial_main = next(gate for gate in initial_gates if gate["name"] == "Main Gate")
+    assert initial_main["scanned_count"] == 0
+    assert initial_main["last_synced"] is None
+    assert initial_main["online"] is True
+
+    # Valid scan
+    first_scan = client.post(
+        "/scans",
+        json={"qr_signature": ticket["qr_signature"], "gate_id": 1, "volunteer_id": 1},
+        headers=scanner_headers,
+    )
+    assert first_scan.status_code == 200
+    assert first_scan.json()["result"] == "valid"
+
+    # Duplicate scan attempt
+    second_scan = client.post(
+        "/scans",
+        json={"qr_signature": ticket["qr_signature"], "gate_id": 1, "volunteer_id": 1},
+        headers=scanner_headers,
+    )
+    assert second_scan.status_code == 200
+    assert second_scan.json()["result"] == "duplicate"
+
+    # Invalid scan attempt
+    invalid_scan = client.post(
+        "/scans",
+        json={"qr_signature": "TX-999.invalid-sig", "gate_id": 1, "volunteer_id": 1},
+        headers=scanner_headers,
+    )
+    assert invalid_scan.status_code == 200
+    assert invalid_scan.json()["result"] == "invalid"
+
+    # Verify status: only valid scan is counted, and last_synced is present
+    response = client.get("/gates/status", headers=scanner_headers)
+    assert response.status_code == 200
+    gates = response.json()
+    main_gate = next(gate for gate in gates if gate["name"] == "Main Gate")
+    assert main_gate["scanned_count"] == 1
+    assert main_gate["online"] is True
+    assert main_gate["last_synced"] is not None
+
+
+def test_gate_status_can_filter_by_event() -> None:
+    reset_database()
+    client = TestClient(app)
+    admin_headers = auth_headers(client, "admin", "admin123")
+    event = client.post(
+        "/events",
+        json={
+            "title": "Robotics Expo",
+            "description": "Student robotics demonstrations.",
+            "date_time": "2026-10-01T10:00:00",
+            "venue": "Lab Block",
+            "capacity": 100,
+        },
+        headers=admin_headers,
+    ).json()
+    client.post(
+        "/gates",
+        json={
+            "event_id": event["id"],
+            "name": "Lab Gate",
+            "location": "Block A",
+            "volunteer_name": "Lab Volunteer",
+        },
+        headers=admin_headers,
+    )
+
+    response = client.get(f"/gates/status?event_id={event['id']}", headers=admin_headers)
+
+    assert response.status_code == 200
+    gates = response.json()
+    assert len(gates) == 1
+    assert gates[0]["name"] == "Lab Gate"
+    assert gates[0]["event_id"] == event["id"]
+
+
+def test_gate_status_role_protection() -> None:
+    reset_database()
+    client = TestClient(app)
+    user_headers = auth_headers(client, "attendee", "attendee123")
+    admin_headers = auth_headers(client, "admin", "admin123")
+    scanner_headers = auth_headers(client, "scanner", "scanner123")
+
+    # Unauthenticated access rejected
+    assert client.get("/gates/status").status_code == 401
+    # Attendee / normal user role rejected
+    assert client.get("/gates/status", headers=user_headers).status_code == 403
+    # Admin and scanner roles allowed
+    assert client.get("/gates/status", headers=admin_headers).status_code == 200
+    assert client.get("/gates/status", headers=scanner_headers).status_code == 200

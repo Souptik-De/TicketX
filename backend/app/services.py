@@ -1,8 +1,11 @@
+from datetime import datetime
+
 from fastapi import HTTPException, status
+from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
 from .models import Attendee, Event, Gate, Scan, Ticket, Volunteer
-from .schemas import GateCreate, PriorScan, ScanCreate, ScanResult, TicketCreate
+from .schemas import GateCreate, GateStatus, PriorScan, ScanCreate, ScanResult, TicketCreate
 from .security import sign_ticket, ticket_id_from_signature
 
 
@@ -163,3 +166,32 @@ def create_gate(db: Session, payload: GateCreate) -> Gate:
     db.commit()
     db.refresh(gate)
     return gate
+
+
+def get_gate_status(db: Session, event_id: int | None = None) -> list[GateStatus]:
+    query = db.query(
+        Gate.id,
+        Gate.event_id,
+        Gate.name,
+        Gate.location,
+        func.count(Scan.id).filter(Scan.result == "valid").label("scanned_count"),
+        func.max(Scan.timestamp).label("last_synced"),
+    ).outerjoin(Scan)
+
+    if event_id is not None:
+        query = query.filter(Gate.event_id == event_id)
+
+    rows = query.group_by(Gate.id, Gate.event_id, Gate.name, Gate.location).order_by(Gate.id).all()
+
+    return [
+        GateStatus(
+            gate_id=row.id,
+            event_id=row.event_id,
+            name=row.name,
+            location=row.location,
+            online=True,
+            scanned_count=row.scanned_count or 0,
+            last_synced=row.last_synced if isinstance(row.last_synced, datetime) else None,
+        )
+        for row in rows
+    ]

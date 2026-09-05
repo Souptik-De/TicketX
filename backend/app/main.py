@@ -13,6 +13,7 @@ from .schemas import (
     EventOut,
     GateCreate,
     GateOut,
+    GateStatus,
     LoginRequest,
     LoginResponse,
     ScanCreate,
@@ -24,7 +25,7 @@ from .schemas import (
     VolunteerOut,
 )
 from .seed import seed_reference_data
-from .services import create_gate, issue_ticket, record_scan
+from .services import create_gate, get_gate_status, issue_ticket, record_scan
 
 
 @asynccontextmanager
@@ -158,3 +159,12 @@ def scan_ticket(
     db: Session = Depends(get_db),
 ) -> ScanResult:
     return record_scan(db, payload)
+
+
+@app.get("/gates/status", response_model=list[GateStatus])
+def gates_status(
+    event_id: int | None = Query(default=None),
+    _: User = Depends(require_roles("admin", "scanner")),
+    db: Session = Depends(get_db),
+) -> list[GateStatus]:
+    return get_gate_status(db, event_id=event_id)
