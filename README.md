@@ -36,10 +36,13 @@ This runs the FastAPI contract tests and verifies that the React app builds.
 
 ## Features
 
-- Role-based login for attendees, admins, and ticket scanners.
-- Create events from the admin panel.
+- Separate authenticated workspaces for attendees, admins, and ticket scanners.
+- Public event homepage with descriptions, dates, venues, capacity, and seating availability.
+- Create events with descriptions from the admin panel.
 - Add event-specific gates with assigned volunteers.
-- Select an event and generate an attendee QR ticket.
+- Show issued and remaining seats with a per-tier breakdown for every event.
+- Allocate an individual General, Premium, or VIP seat number to each QR ticket.
+- Download a complete PNG event pass containing the scannable QR, event name, ticket ID, attendee, tier, and seat.
 - Validate tickets by QR payload or camera scan.
 - Reject reused tickets with duplicate-scan details.
 - Monitor live check-in counts for each gate.
@@ -51,7 +54,7 @@ This runs the FastAPI contract tests and verifies that the React app builds.
 | --- | --- | --- |
 | Auth | `POST /auth/login` | Sign in and receive a bearer token for the selected role. |
 | Auth | `GET /auth/me` | Return the current signed-in user. |
-| Shared | `GET /events` | Return available events after login. |
+| Public | `GET /events` | Return available events for the public homepage. |
 | Admin | `POST /events` | Create a new event from the admin panel. |
 | Admin | `POST /gates` | Add a gate to an event. |
 | ET-01 | `POST /tickets` | Create attendee and issue ticket if event capacity remains. |

@@ -20,6 +20,7 @@ def seed_reference_data(db: Session) -> None:
         db.add(
             Event(
                 title="Techno Cultural Fest 2026",
+                description="A campus-wide evening of live music, technology showcases, performances, and student exhibitions.",
                 date_time=datetime.now(UTC).replace(tzinfo=None) + timedelta(days=14),
                 venue="Main Auditorium",
                 capacity=500,
@@ -28,6 +29,9 @@ def seed_reference_data(db: Session) -> None:
         db.flush()
 
     event = db.query(Event).order_by(Event.id.asc()).first()
+
+    if event and not event.description:
+        event.description = "A campus-wide evening of live music, technology showcases, performances, and student exhibitions."
 
     if db.query(Gate).count() == 0:
         main_gate = Gate(name="Main Gate", location="Auditorium front entrance", event_id=event.id if event else None)

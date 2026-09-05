@@ -58,3 +58,14 @@ export function createGate(payload) {
 export function getVolunteers() {
   return request("/volunteers");
 }
+
+export function issueTicket(payload) {
+  return request("/tickets", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function getTicket(ticketId) {
+  return request(`/tickets/${ticketId}`);
+}

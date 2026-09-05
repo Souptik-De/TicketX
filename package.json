@@ -5,14 +5,18 @@
   "description": "Event ticketing with QR validation for DSC3153 Sprint 1.",
   "scripts": {
     "dev": "concurrently \"python -m uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8000\" \"npm --workspace frontend run dev\"",
-    "test": "python -m pytest backend/tests && npm --workspace frontend run build",
+    "test": "python -m pytest backend/tests && npm run lint && npm --workspace frontend run build",
+    "lint": "eslint frontend/src",
     "frontend:dev": "npm --workspace frontend run dev",
     "frontend:build": "npm --workspace frontend run build",
     "backend:dev": "python -m uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8000",
     "backend:test": "python -m pytest backend/tests"
   },
   "devDependencies": {
-    "concurrently": "^9.2.1"
+    "@eslint/js": "^10.0.1",
+    "concurrently": "^9.2.1",
+    "eslint": "^10.10.0",
+    "globals": "^17.12.0"
   },
   "workspaces": [
     "frontend"

@@ -1,10 +1,13 @@
 import { useState } from "react";
-import { CalendarPlus, DoorOpen, MapPin, Plus, UsersRound } from "lucide-react";
+import { Armchair, CalendarPlus, DoorOpen, MapPin, Plus, UsersRound } from "lucide-react";
 
 import { createEvent, createGate } from "../lib/api";
 
 export function AdminPanel({ events, gates, selectedEventId, onEventChange, onEventCreated, onGateCreated }) {
   const [title, setTitle] = useState("Freshers Night 2026");
+  const [description, setDescription] = useState(
+    "An evening of live performances, student showcases, food stalls, and campus celebrations.",
+  );
   const [venue, setVenue] = useState("Seminar Hall");
   const [dateTime, setDateTime] = useState("2026-09-18T18:30");
   const [capacity, setCapacity] = useState(250);
@@ -19,7 +22,8 @@ export function AdminPanel({ events, gates, selectedEventId, onEventChange, onEv
   const selectedEvent = events.find((event) => event.id === Number(selectedEventId)) ?? events[0];
   const selectedEventGates = selectedEvent ? gates.filter((gate) => gate.event_id === selectedEvent.id) : [];
   const totalCapacity = events.reduce((sum, event) => sum + event.capacity, 0);
-  const totalCheckedIn = gates.reduce((sum, gate) => sum + gate.scanned_count, 0);
+  const totalIssued = events.reduce((sum, event) => sum + event.issued_count, 0);
+  const totalCheckedIn = gates.reduce((sum, gate) => sum + (gate.scanned_count || 0), 0);
 
   async function handleEventSubmit(eventObject) {
     eventObject.preventDefault();
@@ -30,6 +34,7 @@ export function AdminPanel({ events, gates, selectedEventId, onEventChange, onEv
     try {
       const created = await createEvent({
         title,
+        description,
         venue,
         date_time: new Date(dateTime).toISOString(),
         capacity,
@@ -82,6 +87,15 @@ export function AdminPanel({ events, gates, selectedEventId, onEventChange, onEv
             <label className="full-width">
               Event title
               <input value={title} onChange={(event) => setTitle(event.target.value)} required minLength={3} />
+            </label>
+            <label className="full-width">
+              Event description
+              <textarea
+                rows={4}
+                value={description}
+                onChange={(event) => setDescription(event.target.value)}
+                placeholder="What can attendees expect?"
+              />
             </label>
             <label>
               Venue
@@ -163,6 +177,11 @@ export function AdminPanel({ events, gates, selectedEventId, onEventChange, onEv
               <span>Checked in</span>
               <strong>{totalCheckedIn}</strong>
             </div>
+            <div>
+              <Armchair size={20} aria-hidden="true" />
+              <span>Seats issued</span>
+              <strong>{totalIssued}</strong>
+            </div>
           </div>
           <div className="event-list">
             {events.map((event) => (
@@ -172,13 +191,23 @@ export function AdminPanel({ events, gates, selectedEventId, onEventChange, onEv
                 className={`event-row event-button ${selectedEvent?.id === event.id ? "selected" : ""}`}
                 onClick={() => onEventChange(event.id)}
               >
-                <span>
+                <span className="event-row-copy">
                   <strong>{event.title}</strong>
                   <small>
                     {event.venue} - {new Date(event.date_time).toLocaleString()}
                   </small>
+                  <small className="event-description">{event.description || "Event details will be announced soon."}</small>
+                  <span className="tier-counts">
+                    {["general", "premium", "vip"].map((tier) => {
+                      const count = event.tier_counts?.find((item) => item.tier === tier)?.issued_count ?? 0;
+                      return <em key={tier}>{tier}: {count}</em>;
+                    })}
+                  </span>
                 </span>
-                <b>{event.capacity}</b>
+                <span className="seat-total">
+                  <b>{event.issued_count}</b>
+                  <small>of {event.capacity} issued</small>
+                </span>
               </button>
             ))}
           </div>

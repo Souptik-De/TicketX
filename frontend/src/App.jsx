@@ -1,15 +1,18 @@
-import { useEffect, useMemo, useState } from "react";
-import { CalendarDays, LogOut, Moon, RadioTower, ShieldCheck, Sun, Ticket, UserRound } from "lucide-react";
+import { useEffect, useState } from "react";
+import { CalendarDays, Home, LogOut, Moon, ShieldCheck, Sun, Ticket, UserRound } from "lucide-react";
 
 import { getEvents, getGates, setAuthToken } from "./lib/api";
 import { AdminPanel } from "./components/AdminPanel";
+import { HomePage } from "./components/HomePage";
 import { LoginPanel } from "./components/LoginPanel";
+import { TicketIssuer } from "./components/TicketIssuer";
+import { TicketPreview } from "./components/TicketPreview";
 
-const panels = [
-  { id: "user", label: "Ticket", icon: UserRound, roles: ["user", "admin"] },
-  { id: "admin", label: "Admin", icon: ShieldCheck, roles: ["admin"] },
-  { id: "gate", label: "Scanner", icon: Ticket, roles: ["scanner", "admin"] },
-];
+const workspaces = {
+  user: { id: "user", label: "User workspace", icon: UserRound },
+  admin: { id: "admin", label: "Admin workspace", icon: ShieldCheck },
+  scanner: { id: "gate", label: "Scanner workspace", icon: Ticket },
+};
 
 function getStoredUser() {
   try {
@@ -23,19 +26,15 @@ function getStoredUser() {
 
 function App() {
   const [sessionUser, setSessionUser] = useState(getStoredUser);
-  const [activePanel, setActivePanel] = useState("user");
   const [theme, setTheme] = useState(() => localStorage.getItem("ticketx-theme") ?? "light");
+  const [view, setView] = useState("home");
+  const [requestedRole, setRequestedRole] = useState("user");
   const [selectedEventId, setSelectedEventId] = useState("");
   const [events, setEvents] = useState([]);
+  const [isLoadingEvents, setIsLoadingEvents] = useState(true);
   const [gates, setGates] = useState([]);
+  const [ticket, setTicket] = useState(null);
   const [loadError, setLoadError] = useState("");
-
-  const visiblePanels = useMemo(() => {
-    if (!sessionUser) {
-      return [];
-    }
-    return panels.filter((panel) => panel.roles.includes(sessionUser.role));
-  }, [sessionUser]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -43,15 +42,36 @@ function App() {
   }, [theme]);
 
   useEffect(() => {
-    if (sessionUser && visiblePanels.length > 0 && !visiblePanels.some((panel) => panel.id === activePanel)) {
-      setActivePanel(visiblePanels[0].id);
-    }
-  }, [activePanel, sessionUser, visiblePanels]);
+    let isActive = true;
+    setIsLoadingEvents(true);
+    getEvents()
+      .then((eventList) => {
+        if (isActive) {
+          setEvents(eventList);
+          setLoadError("");
+        }
+      })
+      .catch((error) => {
+        if (isActive) {
+          setLoadError(error instanceof Error ? error.message : "Could not load upcoming events");
+        }
+      })
+      .finally(() => {
+        if (isActive) {
+          setIsLoadingEvents(false);
+        }
+      });
+
+    return () => {
+      isActive = false;
+    };
+  }, []);
 
   async function refreshGates(eventId = selectedEventId) {
-    if (!["admin", "scanner"].includes(sessionUser?.role)) {
+    if (sessionUser?.role !== "admin") {
       return;
     }
+
     const gateList = await getGates(eventId);
     setGates(gateList.map((gate) => ({ ...gate, scanned_count: gate.scanned_count ?? 0 })));
   }
@@ -64,14 +84,16 @@ function App() {
     const eventList = await getEvents();
     setEvents(eventList);
 
-    const activeEventId = eventId || (eventList[0] ? eventList[0].id : "");
     if (!eventId && eventList[0]) {
       setSelectedEventId(eventList[0].id);
     }
 
-    if (["admin", "scanner"].includes(sessionUser.role)) {
-      const gateList = await getGates(activeEventId);
-      setGates(gateList.map((gate) => ({ ...gate, scanned_count: gate.scanned_count ?? 0 })));
+    if (sessionUser.role === "admin") {
+      const activeEventId = eventId || eventList[0]?.id || "";
+      if (activeEventId) {
+        const gateList = await getGates(activeEventId);
+        setGates(gateList.map((gate) => ({ ...gate, scanned_count: gate.scanned_count ?? 0 })));
+      }
     }
   }
 
@@ -88,7 +110,7 @@ function App() {
   }, [sessionUser]);
 
   useEffect(() => {
-    if (sessionUser && selectedEventId && ["admin", "scanner"].includes(sessionUser.role)) {
+    if (sessionUser && selectedEventId && sessionUser.role === "admin") {
       refreshGates(selectedEventId).catch((error) => {
         setLoadError(error instanceof Error ? error.message : "Could not refresh gates");
       });
@@ -97,23 +119,68 @@ function App() {
 
   function handleLogin(user) {
     setSessionUser(user);
-    setActivePanel(user.role === "scanner" ? "gate" : user.role === "admin" ? "admin" : "user");
+    setView("workspace");
   }
 
-  function handleLogout() {
+  function handleTicketIssued(issuedTicket) {
+    setTicket(issuedTicket);
+    getEvents().then(setEvents).catch(() => undefined);
+  }
+
+  function clearSession() {
     setAuthToken("");
     localStorage.removeItem("ticketx-user");
     setSessionUser(null);
-    setEvents([]);
+    setTicket(null);
     setGates([]);
+  }
+
+  function handleLogout() {
+    clearSession();
     setSelectedEventId("");
+    setView("home");
+  }
+
+  function handleRoleAccess(role, eventId = "") {
+    if (eventId) {
+      setSelectedEventId(eventId);
+    }
+
+    if (sessionUser?.role === role) {
+      setView("workspace");
+      return;
+    }
+
+    if (sessionUser) {
+      clearSession();
+    }
+    setRequestedRole(role);
+    setView("login");
+  }
+
+  if (view === "home") {
+    return (
+      <HomePage
+        events={events}
+        isLoading={isLoadingEvents}
+        error={loadError}
+        sessionUser={sessionUser}
+        theme={theme}
+        onThemeToggle={() => setTheme((current) => (current === "light" ? "dark" : "light"))}
+        onRoleAccess={handleRoleAccess}
+        onLogout={handleLogout}
+        onGetTicket={(eventId) => handleRoleAccess("user", eventId)}
+      />
+    );
   }
 
   if (!sessionUser) {
-    return <LoginPanel onLogin={handleLogin} />;
+    return <LoginPanel initialRole={requestedRole} onBack={() => setView("home")} onLogin={handleLogin} />;
   }
 
   const selectedEvent = events.find((event) => event.id === Number(selectedEventId)) ?? events[0];
+  const workspace = workspaces[sessionUser.role] ?? workspaces.user;
+  const WorkspaceIcon = workspace.icon;
 
   return (
     <main className="app-shell">
@@ -123,28 +190,19 @@ function App() {
           <h1>TicketX</h1>
         </div>
         <div className="top-actions">
+          <button className="theme-toggle" type="button" onClick={() => setView("home")} aria-label="Return to events">
+            <Home size={18} aria-hidden="true" />
+          </button>
           {selectedEvent && (
             <div className="event-pill">
               <CalendarDays size={18} aria-hidden="true" />
               <span>{selectedEvent.title}</span>
             </div>
           )}
-          <nav className="panel-tabs" aria-label="TicketX panels">
-            {visiblePanels.map((panel) => {
-              const Icon = panel.icon;
-              return (
-                <button
-                  className={activePanel === panel.id ? "active" : ""}
-                  key={panel.id}
-                  type="button"
-                  onClick={() => setActivePanel(panel.id)}
-                >
-                  <Icon size={18} aria-hidden="true" />
-                  {panel.label}
-                </button>
-              );
-            })}
-          </nav>
+          <div className="workspace-badge">
+            <WorkspaceIcon size={18} aria-hidden="true" />
+            <span>{workspace.label}</span>
+          </div>
           <button
             className="theme-toggle"
             type="button"
@@ -166,19 +224,18 @@ function App() {
 
       {loadError && <div className="banner-error">{loadError}</div>}
 
-      {activePanel === "user" && (
+      {workspace.id === "user" && (
         <section className="workspace-grid user-grid">
-          <div className="panel placeholder-panel">
-            <div className="section-heading">
-              <Ticket size={24} aria-hidden="true" />
-              <h2>Ticket Panel</h2>
-            </div>
-            <p className="muted-text">Ticket issuance and attendee passes will be available here.</p>
+          <div className="left-stack">
+            <TicketIssuer events={events} initialEventId={selectedEventId} onTicketIssued={handleTicketIssued} />
+          </div>
+          <div className="right-stack">
+            <TicketPreview ticket={ticket} />
           </div>
         </section>
       )}
 
-      {activePanel === "admin" && (
+      {workspace.id === "admin" && (
         <AdminPanel
           events={events}
           gates={gates}
@@ -188,11 +245,11 @@ function App() {
             setEvents((current) => [...current, event].sort((left, right) => left.date_time.localeCompare(right.date_time)));
             setSelectedEventId(event.id);
           }}
-          onGateCreated={() => refreshDirectory(selectedEventId)}
+          onGateCreated={() => refreshDirectory()}
         />
       )}
 
-      {activePanel === "gate" && (
+      {workspace.id === "gate" && (
         <section className="workspace-grid">
           <div className="panel placeholder-panel">
             <div className="section-heading">
@@ -205,8 +262,8 @@ function App() {
       )}
 
       <footer className="footer-note">
-        <RadioTower size={16} aria-hidden="true" />
-        <span>Gate sync active</span>
+        <Home size={16} aria-hidden="true" />
+        <span>TicketX System</span>
       </footer>
     </main>
   );
