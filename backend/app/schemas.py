@@ -105,6 +105,16 @@ class ScanResult(BaseModel):
     prior_scan: PriorScan | None = None
 
 
+class GateStatus(BaseModel):
+    gate_id: int
+    event_id: int | None
+    name: str
+    location: str
+    online: bool
+    scanned_count: int
+    last_synced: datetime | None
+
+
 class GateCreate(BaseModel):
     event_id: int
     name: str = Field(min_length=2, max_length=80)

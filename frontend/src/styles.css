@@ -605,6 +605,37 @@ a {
   letter-spacing: 0.08em;
 }
 
+.summary-strip {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.summary-strip > div {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 4px 10px;
+  min-height: 86px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  border-radius: 8px;
+  padding: 16px;
+  box-shadow: var(--shadow);
+}
+
+.summary-strip span {
+  color: var(--muted);
+  font-size: 0.9rem;
+  font-weight: 750;
+}
+
+.summary-strip strong {
+  grid-column: 2;
+  font-size: 1.4rem;
+}
+
 .workspace-grid,
 .admin-grid {
   display: grid;
@@ -1093,6 +1124,10 @@ dd {
 
   .top-actions {
     justify-content: flex-start;
+  }
+
+  .summary-strip {
+    grid-template-columns: 1fr;
   }
 }
 
