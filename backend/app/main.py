@@ -15,6 +15,8 @@ from .schemas import (
     GateOut,
     LoginRequest,
     LoginResponse,
+    ScanCreate,
+    ScanResult,
     TicketCreate,
     TicketCreated,
     TicketDetail,
@@ -22,7 +24,7 @@ from .schemas import (
     VolunteerOut,
 )
 from .seed import seed_reference_data
-from .services import create_gate, issue_ticket
+from .services import create_gate, issue_ticket, record_scan
 
 
 @asynccontextmanager
@@ -147,3 +149,12 @@ def get_ticket(
         event=ticket.event,
         attendee=ticket.attendee,
     )
+
+
+@app.post("/scans", response_model=ScanResult)
+def scan_ticket(
+    payload: ScanCreate,
+    _: User = Depends(require_roles("scanner")),
+    db: Session = Depends(get_db),
+) -> ScanResult:
+    return record_scan(db, payload)

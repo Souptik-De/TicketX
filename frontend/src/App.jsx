@@ -1,17 +1,19 @@
 import { useEffect, useState } from "react";
-import { CalendarDays, Home, LogOut, Moon, ShieldCheck, Sun, Ticket, UserRound } from "lucide-react";
+import { CalendarDays, Home, LogOut, Moon, RadioTower, ScanLine, ShieldCheck, Sun, UserRound } from "lucide-react";
 
-import { getEvents, getGates, setAuthToken } from "./lib/api";
+import { getEvents, getGates, getVolunteers, setAuthToken } from "./lib/api";
 import { AdminPanel } from "./components/AdminPanel";
 import { HomePage } from "./components/HomePage";
 import { LoginPanel } from "./components/LoginPanel";
+import { ScannerPanel } from "./components/ScannerPanel";
+import { ScanResultCard } from "./components/ScanResultCard";
 import { TicketIssuer } from "./components/TicketIssuer";
 import { TicketPreview } from "./components/TicketPreview";
 
 const workspaces = {
   user: { id: "user", label: "User workspace", icon: UserRound },
   admin: { id: "admin", label: "Admin workspace", icon: ShieldCheck },
-  scanner: { id: "gate", label: "Scanner workspace", icon: Ticket },
+  scanner: { id: "gate", label: "Scanner workspace", icon: ScanLine },
 };
 
 function getStoredUser() {
@@ -33,7 +35,9 @@ function App() {
   const [events, setEvents] = useState([]);
   const [isLoadingEvents, setIsLoadingEvents] = useState(true);
   const [gates, setGates] = useState([]);
+  const [volunteers, setVolunteers] = useState([]);
   const [ticket, setTicket] = useState(null);
+  const [scanResult, setScanResult] = useState(null);
   const [loadError, setLoadError] = useState("");
 
   useEffect(() => {
@@ -68,7 +72,7 @@ function App() {
   }, []);
 
   async function refreshGates(eventId = selectedEventId) {
-    if (sessionUser?.role !== "admin") {
+    if (!["admin", "scanner"].includes(sessionUser?.role)) {
       return;
     }
 
@@ -88,11 +92,12 @@ function App() {
       setSelectedEventId(eventList[0].id);
     }
 
-    if (sessionUser.role === "admin") {
+    if (["admin", "scanner"].includes(sessionUser.role)) {
       const activeEventId = eventId || eventList[0]?.id || "";
       if (activeEventId) {
-        const gateList = await getGates(activeEventId);
+        const [gateList, volunteerList] = await Promise.all([getGates(activeEventId), getVolunteers()]);
         setGates(gateList.map((gate) => ({ ...gate, scanned_count: gate.scanned_count ?? 0 })));
+        setVolunteers(volunteerList);
       }
     }
   }
@@ -110,7 +115,7 @@ function App() {
   }, [sessionUser]);
 
   useEffect(() => {
-    if (sessionUser && selectedEventId && sessionUser.role === "admin") {
+    if (sessionUser && selectedEventId && ["admin", "scanner"].includes(sessionUser.role)) {
       refreshGates(selectedEventId).catch((error) => {
         setLoadError(error instanceof Error ? error.message : "Could not refresh gates");
       });
@@ -132,7 +137,9 @@ function App() {
     localStorage.removeItem("ticketx-user");
     setSessionUser(null);
     setTicket(null);
+    setScanResult(null);
     setGates([]);
+    setVolunteers([]);
   }
 
   function handleLogout() {
@@ -251,19 +258,23 @@ function App() {
 
       {workspace.id === "gate" && (
         <section className="workspace-grid">
-          <div className="panel placeholder-panel">
-            <div className="section-heading">
-              <Ticket size={24} aria-hidden="true" />
-              <h2>Scanner Panel</h2>
-            </div>
-            <p className="muted-text">Ticket scanner and validation will be available here.</p>
+          <div className="left-stack">
+            <ScannerPanel
+              gates={gates}
+              volunteers={volunteers}
+              onScanComplete={setScanResult}
+              onGateRefresh={() => refreshGates()}
+            />
+          </div>
+          <div className="right-stack">
+            <ScanResultCard result={scanResult} />
           </div>
         </section>
       )}
 
       <footer className="footer-note">
-        <Home size={16} aria-hidden="true" />
-        <span>TicketX System</span>
+        <RadioTower size={16} aria-hidden="true" />
+        <span>Scanner validation active</span>
       </footer>
     </main>
   );

@@ -83,6 +83,22 @@ class TicketDetail(BaseModel):
     attendee: AttendeeOut
 
 
+class ScanCreate(BaseModel):
+    ticket_id: int | None = None
+    qr_signature: str | None = None
+    gate_id: int
+    volunteer_id: int
+
+
+class ScanResult(BaseModel):
+    result: str
+    message: str
+    ticket_id: int | None = None
+    attendee_name: str | None = None
+    tier: str | None = None
+    seat_number: str | None = None
+
+
 class GateCreate(BaseModel):
     event_id: int
     name: str = Field(min_length=2, max_length=80)
