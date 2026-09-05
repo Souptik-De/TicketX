@@ -25,6 +25,12 @@ def get_db() -> Generator[Session, None, None]:
 
 
 def create_database() -> None:
+    if DATABASE_URL.startswith("sqlite"):
+        db_path = DATABASE_URL.removeprefix("sqlite:///")
+        if db_path and not db_path.startswith(":memory:"):
+            folder = os.path.dirname(os.path.abspath(db_path))
+            if folder:
+                os.makedirs(folder, exist_ok=True)
     Base.metadata.create_all(bind=engine)
     migrate_existing_database()
 

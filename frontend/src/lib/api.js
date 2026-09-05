@@ -1,4 +1,5 @@
-const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "/api";
+const rawApiBase = import.meta.env.VITE_API_BASE_URL ?? "/api";
+const API_BASE = rawApiBase.endsWith("/") ? rawApiBase.slice(0, -1) : rawApiBase;
 let authToken = localStorage.getItem("ticketx-token") ?? "";
 
 export function setAuthToken(token) {
