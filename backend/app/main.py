@@ -1,13 +1,13 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, HTTPException, Query, status
+from fastapi import Depends, FastAPI, HTTPException, Query, Response, status
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from .auth import create_token, require_roles, verify_password
 from .database import SessionLocal, create_database, get_db
-from .models import Event, Gate, User, Volunteer
+from .models import Event, Gate, Ticket, User, Volunteer
 from .schemas import (
     EventCreate,
     EventOut,
@@ -15,10 +15,14 @@ from .schemas import (
     GateOut,
     LoginRequest,
     LoginResponse,
+    TicketCreate,
+    TicketCreated,
+    TicketDetail,
     UserOut,
     VolunteerOut,
 )
 from .seed import seed_reference_data
+from .services import create_gate, issue_ticket
 
 
 @asynccontextmanager
@@ -60,7 +64,7 @@ def me(current_user: User = Depends(require_roles("user", "admin", "scanner"))) 
 
 
 @app.get("/events", response_model=list[EventOut])
-def list_events(_: User = Depends(require_roles("user", "admin", "scanner")), db: Session = Depends(get_db)) -> list[Event]:
+def list_events(db: Session = Depends(get_db)) -> list[Event]:
     return db.query(Event).order_by(Event.date_time.asc()).all()
 
 
@@ -68,6 +72,7 @@ def list_events(_: User = Depends(require_roles("user", "admin", "scanner")), db
 def create_event(payload: EventCreate, _: User = Depends(require_roles("admin")), db: Session = Depends(get_db)) -> Event:
     event = Event(
         title=payload.title.strip(),
+        description=payload.description.strip(),
         date_time=payload.date_time,
         venue=payload.venue.strip(),
         capacity=payload.capacity,
@@ -97,17 +102,48 @@ def list_gates(
 
 @app.post("/gates", response_model=GateOut, status_code=status.HTTP_201_CREATED)
 def add_gate(payload: GateCreate, _: User = Depends(require_roles("admin")), db: Session = Depends(get_db)) -> Gate:
-    event = db.get(Event, payload.event_id)
-    if event is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
+    return create_gate(db, payload)
 
-    gate = Gate(name=payload.name.strip(), location=payload.location.strip(), event_id=event.id)
-    db.add(gate)
-    db.flush()
 
-    if payload.volunteer_name:
-        db.add(Volunteer(name=payload.volunteer_name.strip(), gate_id=gate.id))
+@app.post("/tickets", response_model=TicketCreated, status_code=status.HTTP_201_CREATED)
+def create_ticket(
+    payload: TicketCreate,
+    response: Response,
+    _: User = Depends(require_roles("user")),
+    db: Session = Depends(get_db),
+) -> TicketCreated:
+    ticket = issue_ticket(db, payload)
+    response.headers["Location"] = f"/tickets/{ticket.id}"
+    return TicketCreated(
+        ticket_id=ticket.id,
+        qr_signature=ticket.qr_signature or "",
+        tier=ticket.tier,
+        seat_number=ticket.seat_number or "",
+        status=ticket.status,
+    )
 
-    db.commit()
-    db.refresh(gate)
-    return gate
+
+@app.get("/tickets/{ticket_id}", response_model=TicketDetail)
+def get_ticket(
+    ticket_id: int,
+    _: User = Depends(require_roles("user")),
+    db: Session = Depends(get_db),
+) -> TicketDetail:
+    ticket = (
+        db.query(Ticket)
+        .options(joinedload(Ticket.event), joinedload(Ticket.attendee))
+        .filter(Ticket.id == ticket_id)
+        .one_or_none()
+    )
+    if ticket is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ticket not found")
+
+    return TicketDetail(
+        ticket_id=ticket.id,
+        qr_signature=ticket.qr_signature or "",
+        tier=ticket.tier,
+        seat_number=ticket.seat_number or "",
+        status=ticket.status,
+        event=ticket.event,
+        attendee=ticket.attendee,
+    )

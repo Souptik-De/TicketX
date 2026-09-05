@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { LockKeyhole, ScanLine, ShieldCheck, UserRound } from "lucide-react";
+import { ArrowLeft, LockKeyhole, ScanLine, ShieldCheck, UserRound } from "lucide-react";
 
 import { login, setAuthToken } from "../lib/api";
 
@@ -30,9 +30,10 @@ const demoAccounts = [
   },
 ];
 
-export function LoginPanel({ onLogin }) {
-  const [username, setUsername] = useState("attendee");
-  const [password, setPassword] = useState("attendee123");
+export function LoginPanel({ initialRole = "user", onBack, onLogin }) {
+  const initialAccount = demoAccounts.find((account) => account.role === initialRole) ?? demoAccounts[0];
+  const [username, setUsername] = useState(initialAccount.username);
+  const [password, setPassword] = useState(initialAccount.password);
   const [error, setError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -62,6 +63,10 @@ export function LoginPanel({ onLogin }) {
   return (
     <main className="login-shell">
       <section className="login-hero">
+        <button className="login-back" type="button" onClick={onBack}>
+          <ArrowLeft size={18} aria-hidden="true" />
+          Back to events
+        </button>
         <p className="eyebrow">Secure Entry System</p>
         <h1>TicketX</h1>
         <p>Sign in with a role account to issue tickets, manage events, or scan QR codes at the gate.</p>
