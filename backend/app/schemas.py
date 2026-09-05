@@ -90,6 +90,11 @@ class ScanCreate(BaseModel):
     volunteer_id: int
 
 
+class PriorScan(BaseModel):
+    gate_name: str
+    timestamp: datetime
+
+
 class ScanResult(BaseModel):
     result: str
     message: str
@@ -97,6 +102,7 @@ class ScanResult(BaseModel):
     attendee_name: str | None = None
     tier: str | None = None
     seat_number: str | None = None
+    prior_scan: PriorScan | None = None
 
 
 class GateCreate(BaseModel):

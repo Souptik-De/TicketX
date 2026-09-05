@@ -2,7 +2,7 @@ from fastapi import HTTPException, status
 from sqlalchemy.orm import Session, joinedload
 
 from .models import Attendee, Event, Gate, Scan, Ticket, Volunteer
-from .schemas import GateCreate, ScanCreate, ScanResult, TicketCreate
+from .schemas import GateCreate, PriorScan, ScanCreate, ScanResult, TicketCreate
 from .security import sign_ticket, ticket_id_from_signature
 
 
@@ -64,22 +64,9 @@ def find_ticket_by_scan_payload(db: Session, payload: ScanCreate) -> Ticket | No
 
     return (
         db.query(Ticket)
-        .options(joinedload(Ticket.attendee))
+        .options(joinedload(Ticket.attendee), joinedload(Ticket.scans).joinedload(Scan.gate))
         .filter(Ticket.id == ticket_id)
         .one_or_none()
-    )
-
-
-def _invalid_scan_result(db: Session, ticket: Ticket, gate: Gate, volunteer: Volunteer, message: str) -> ScanResult:
-    db.add(Scan(ticket_id=ticket.id, gate_id=gate.id, volunteer_id=volunteer.id, result="invalid"))
-    db.commit()
-    return ScanResult(
-        result="invalid",
-        message=message,
-        ticket_id=ticket.id,
-        attendee_name=ticket.attendee.name,
-        tier=ticket.tier,
-        seat_number=ticket.seat_number,
     )
 
 
@@ -96,19 +83,60 @@ def record_scan(db: Session, payload: ScanCreate) -> ScanResult:
 
     ticket = find_ticket_by_scan_payload(db, payload)
     if ticket is None:
-        if payload.ticket_id is not None and not payload.qr_signature:
+        if payload.ticket_id is not None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ticket not found")
         return ScanResult(result="invalid", message="QR signature could not be verified.")
 
     if gate.event_id is not None and ticket.event_id != gate.event_id:
-        return _invalid_scan_result(db, ticket, gate, volunteer, "Ticket does not belong to this gate's event.")
+        scan = Scan(ticket_id=ticket.id, gate_id=gate.id, volunteer_id=volunteer.id, result="invalid")
+        db.add(scan)
+        db.commit()
+        return ScanResult(
+            result="invalid",
+            message="Ticket does not belong to this gate's event.",
+            ticket_id=ticket.id,
+            attendee_name=ticket.attendee.name,
+            tier=ticket.tier,
+            seat_number=ticket.seat_number,
+        )
 
-    if ticket.status != "issued":
-        message = "Ticket has been revoked." if ticket.status == "revoked" else "Ticket is not available for entry."
-        return _invalid_scan_result(db, ticket, gate, volunteer, message)
+    if ticket.status == "revoked":
+        scan = Scan(ticket_id=ticket.id, gate_id=gate.id, volunteer_id=volunteer.id, result="invalid")
+        db.add(scan)
+        db.commit()
+        return ScanResult(
+            result="invalid",
+            message="Ticket has been revoked.",
+            ticket_id=ticket.id,
+            attendee_name=ticket.attendee.name,
+            tier=ticket.tier,
+            seat_number=ticket.seat_number,
+        )
+
+    prior_valid_scan = (
+        db.query(Scan)
+        .options(joinedload(Scan.gate))
+        .filter(Scan.ticket_id == ticket.id, Scan.result == "valid")
+        .order_by(Scan.timestamp.asc())
+        .first()
+    )
+    if prior_valid_scan is not None:
+        duplicate = Scan(ticket_id=ticket.id, gate_id=gate.id, volunteer_id=volunteer.id, result="duplicate")
+        db.add(duplicate)
+        db.commit()
+        return ScanResult(
+            result="duplicate",
+            message=f"Already used at {prior_valid_scan.gate.name}.",
+            ticket_id=ticket.id,
+            attendee_name=ticket.attendee.name,
+            tier=ticket.tier,
+            seat_number=ticket.seat_number,
+            prior_scan=PriorScan(gate_name=prior_valid_scan.gate.name, timestamp=prior_valid_scan.timestamp),
+        )
 
     ticket.status = "used"
-    db.add(Scan(ticket_id=ticket.id, gate_id=gate.id, volunteer_id=volunteer.id, result="valid"))
+    scan = Scan(ticket_id=ticket.id, gate_id=gate.id, volunteer_id=volunteer.id, result="valid")
+    db.add(scan)
     db.commit()
     return ScanResult(
         result="valid",
