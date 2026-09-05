@@ -12,13 +12,14 @@ export function ScanResultCard({ result }) {
   }
 
   const isValid = result.result === "valid";
-  const Icon = isValid ? CheckCircle2 : XCircle;
+  const isDuplicate = result.result === "duplicate";
+  const Icon = isValid ? CheckCircle2 : isDuplicate ? AlertTriangle : XCircle;
 
   return (
     <section className={`panel scan-result ${result.result}`}>
       <Icon aria-hidden="true" />
       <p className="eyebrow">Scan Result</p>
-      <h2>{isValid ? "Valid ticket" : "Invalid ticket"}</h2>
+      <h2>{isValid ? "Valid ticket" : isDuplicate ? "Already used" : "Invalid ticket"}</h2>
       <p>{result.message}</p>
       {result.attendee_name && (
         <dl className="result-meta">
@@ -34,6 +35,14 @@ export function ScanResultCard({ result }) {
             <dt>Seat</dt>
             <dd>{result.seat_number}</dd>
           </div>
+          {result.prior_scan && (
+            <div>
+              <dt>First scan</dt>
+              <dd>
+                {result.prior_scan.gate_name}, {new Date(result.prior_scan.timestamp).toLocaleTimeString()}
+              </dd>
+            </div>
+          )}
         </dl>
       )}
     </section>

@@ -431,3 +431,46 @@ def test_scanner_reports_missing_gate_and_volunteer() -> None:
     assert missing_gate.json()["detail"] == "Gate not found"
     assert missing_volunteer.status_code == 404
     assert missing_volunteer.json()["detail"] == "Volunteer not found"
+
+
+def test_valid_scan_then_duplicate_scan() -> None:
+    reset_database()
+    client = TestClient(app)
+    user_headers = auth_headers(client, "attendee", "attendee123")
+    scanner_headers = auth_headers(client, "scanner", "scanner123")
+    ticket = client.post(
+        "/tickets",
+        json={"event_id": 1, "attendee_name": "Riya Sen", "attendee_contact": "riya@example.edu"},
+        headers=user_headers,
+    ).json()
+
+    first_scan = client.post(
+        "/scans",
+        json={"qr_signature": ticket["qr_signature"], "gate_id": 1, "volunteer_id": 1},
+        headers=scanner_headers,
+    )
+    second_scan = client.post(
+        "/scans",
+        json={"qr_signature": ticket["qr_signature"], "gate_id": 1, "volunteer_id": 1},
+        headers=scanner_headers,
+    )
+
+    assert first_scan.status_code == 200
+    first_body = first_scan.json()
+    assert first_body["result"] == "valid"
+    assert second_scan.status_code == 200
+    duplicate_body = second_scan.json()
+    assert duplicate_body["result"] == "duplicate"
+    assert duplicate_body["prior_scan"]["gate_name"] == "Main Gate"
+    assert duplicate_body["prior_scan"]["timestamp"] is not None
+    assert duplicate_body["attendee_name"] == "Riya Sen"
+    assert duplicate_body["tier"] == "general"
+    assert duplicate_body["seat_number"] == "GEN-001"
+
+    with SessionLocal() as db:
+        scans = db.query(Scan).filter(Scan.ticket_id == ticket["ticket_id"]).all()
+        assert len(scans) == 2
+        valid_scans = [s for s in scans if s.result == "valid"]
+        duplicate_scans = [s for s in scans if s.result == "duplicate"]
+        assert len(valid_scans) == 1
+        assert len(duplicate_scans) == 1
