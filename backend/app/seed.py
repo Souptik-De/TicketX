@@ -35,9 +35,16 @@ def seed_reference_data(db: Session) -> None:
 
     if db.query(Gate).count() == 0:
         main_gate = Gate(name="Main Gate", location="Auditorium front entrance", event_id=event.id if event else None)
-        db.add(main_gate)
+        side_gate = Gate(name="Side Gate", location="Canteen walkway", event_id=event.id if event else None)
+        db.add_all([main_gate, side_gate])
         db.flush()
-        db.add(Volunteer(name="Souptik De", gate_id=main_gate.id))
+        db.add_all(
+            [
+                Volunteer(name="Aparna Dutta", gate_id=main_gate.id),
+                Volunteer(name="Soumyadip Das", gate_id=main_gate.id),
+                Volunteer(name="Souptik De", gate_id=side_gate.id),
+            ]
+        )
     else:
         db.query(Gate).filter(Gate.event_id.is_(None)).update({"event_id": event.id if event else None})
 

@@ -1,9 +1,9 @@
 from fastapi import HTTPException, status
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
-from .models import Attendee, Event, Gate, Ticket, Volunteer
-from .schemas import GateCreate, TicketCreate
-from .security import sign_ticket
+from .models import Attendee, Event, Gate, Scan, Ticket, Volunteer
+from .schemas import GateCreate, ScanCreate, ScanResult, TicketCreate
+from .security import sign_ticket, ticket_id_from_signature
 
 
 TIER_PREFIXES = {"general": "GEN", "premium": "PRE", "vip": "VIP"}
@@ -49,6 +49,75 @@ def issue_ticket(db: Session, payload: TicketCreate) -> Ticket:
     db.commit()
     db.refresh(ticket)
     return ticket
+
+
+def find_ticket_by_scan_payload(db: Session, payload: ScanCreate) -> Ticket | None:
+    ticket_id = payload.ticket_id
+    if payload.qr_signature:
+        signed_ticket_id = ticket_id_from_signature(payload.qr_signature)
+        if signed_ticket_id is None:
+            return None
+        ticket_id = signed_ticket_id
+
+    if ticket_id is None:
+        return None
+
+    return (
+        db.query(Ticket)
+        .options(joinedload(Ticket.attendee))
+        .filter(Ticket.id == ticket_id)
+        .one_or_none()
+    )
+
+
+def _invalid_scan_result(db: Session, ticket: Ticket, gate: Gate, volunteer: Volunteer, message: str) -> ScanResult:
+    db.add(Scan(ticket_id=ticket.id, gate_id=gate.id, volunteer_id=volunteer.id, result="invalid"))
+    db.commit()
+    return ScanResult(
+        result="invalid",
+        message=message,
+        ticket_id=ticket.id,
+        attendee_name=ticket.attendee.name,
+        tier=ticket.tier,
+        seat_number=ticket.seat_number,
+    )
+
+
+def record_scan(db: Session, payload: ScanCreate) -> ScanResult:
+    gate = db.get(Gate, payload.gate_id)
+    volunteer = db.get(Volunteer, payload.volunteer_id)
+
+    if gate is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Gate not found")
+    if volunteer is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Volunteer not found")
+    if volunteer.gate_id is not None and volunteer.gate_id != gate.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Volunteer is not assigned to this gate")
+
+    ticket = find_ticket_by_scan_payload(db, payload)
+    if ticket is None:
+        if payload.ticket_id is not None and not payload.qr_signature:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ticket not found")
+        return ScanResult(result="invalid", message="QR signature could not be verified.")
+
+    if gate.event_id is not None and ticket.event_id != gate.event_id:
+        return _invalid_scan_result(db, ticket, gate, volunteer, "Ticket does not belong to this gate's event.")
+
+    if ticket.status != "issued":
+        message = "Ticket has been revoked." if ticket.status == "revoked" else "Ticket is not available for entry."
+        return _invalid_scan_result(db, ticket, gate, volunteer, message)
+
+    ticket.status = "used"
+    db.add(Scan(ticket_id=ticket.id, gate_id=gate.id, volunteer_id=volunteer.id, result="valid"))
+    db.commit()
+    return ScanResult(
+        result="valid",
+        message="Ticket accepted. Welcome in.",
+        ticket_id=ticket.id,
+        attendee_name=ticket.attendee.name,
+        tier=ticket.tier,
+        seat_number=ticket.seat_number,
+    )
 
 
 def create_gate(db: Session, payload: GateCreate) -> Gate:

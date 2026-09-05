@@ -637,7 +637,8 @@ a {
 }
 
 .section-heading h2,
-.ticket-preview h2 {
+.ticket-preview h2,
+.scan-result h2 {
   margin: 0;
   font-size: 1.35rem;
   line-height: 1.2;
@@ -650,7 +651,8 @@ a {
   gap: 16px;
 }
 
-.ticket-form {
+.ticket-form,
+.scan-form {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
@@ -735,6 +737,20 @@ textarea {
   padding: 0;
 }
 
+.scanner-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.qr-reader {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  margin-bottom: 14px;
+}
+
 .ticket-preview {
   display: grid;
   grid-template-columns: 1fr auto;
@@ -747,19 +763,22 @@ textarea {
   min-height: 210px;
 }
 
-.ticket-preview.empty-state svg {
+.ticket-preview.empty-state svg,
+.scan-result svg {
   color: var(--brand);
 }
 
 .ticket-copy > p:not(.eyebrow),
 .empty-state p,
+.scan-result p,
 .gate-row p,
 .footer-note,
 .muted-text {
   color: var(--muted);
 }
 
-.ticket-meta {
+.ticket-meta,
+.result-meta {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   gap: 10px;
@@ -800,6 +819,21 @@ dd {
 
 .ticket-preview .ghost-button {
   grid-column: 1 / -1;
+}
+
+.scan-result {
+  min-height: 190px;
+  border-left: 8px solid var(--line-strong);
+}
+
+.scan-result.valid {
+  border-left-color: var(--success);
+  background: var(--success-soft);
+}
+
+.scan-result.invalid {
+  border-left-color: var(--danger);
+  background: var(--danger-soft);
 }
 
 .gate-list,
@@ -1153,7 +1187,9 @@ dd {
   }
 
   .ticket-form,
+  .scan-form,
   .ticket-meta,
+  .result-meta,
   .admin-metrics,
   .event-row,
   .gate-row {

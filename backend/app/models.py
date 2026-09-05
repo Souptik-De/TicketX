@@ -66,6 +66,7 @@ class Ticket(Base):
 
     event: Mapped[Event] = relationship(back_populates="tickets")
     attendee: Mapped[Attendee] = relationship(back_populates="tickets")
+    scans: Mapped[list["Scan"]] = relationship(back_populates="ticket")
 
 
 class Gate(Base):
@@ -78,6 +79,7 @@ class Gate(Base):
 
     event: Mapped[Event | None] = relationship(back_populates="gates")
     volunteers: Mapped[list["Volunteer"]] = relationship(back_populates="gate")
+    scans: Mapped[list["Scan"]] = relationship(back_populates="gate")
 
 
 class Volunteer(Base):
@@ -88,3 +90,23 @@ class Volunteer(Base):
     gate_id: Mapped[int | None] = mapped_column(ForeignKey("gates.gate_id"), nullable=True)
 
     gate: Mapped[Gate | None] = relationship(back_populates="volunteers")
+    scans: Mapped[list["Scan"]] = relationship(back_populates="volunteer")
+
+
+class Scan(Base):
+    __tablename__ = "scans"
+
+    id: Mapped[int] = mapped_column("scan_id", Integer, primary_key=True, index=True)
+    timestamp: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=lambda: datetime.now(UTC).replace(tzinfo=None),
+        nullable=False,
+    )
+    result: Mapped[str] = mapped_column(String(20), nullable=False)
+    ticket_id: Mapped[int] = mapped_column(ForeignKey("tickets.ticket_id"), nullable=False)
+    gate_id: Mapped[int] = mapped_column(ForeignKey("gates.gate_id"), nullable=False)
+    volunteer_id: Mapped[int] = mapped_column(ForeignKey("volunteers.volunteer_id"), nullable=False)
+
+    ticket: Mapped[Ticket] = relationship(back_populates="scans")
+    gate: Mapped[Gate] = relationship(back_populates="scans")
+    volunteer: Mapped[Volunteer] = relationship(back_populates="scans")

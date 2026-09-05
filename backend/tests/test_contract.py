@@ -10,6 +10,7 @@ os.environ["DATABASE_URL"] = f"sqlite:///{TEST_DATABASE_PATH.as_posix()}"
 
 from backend.app.database import Base, SessionLocal, engine
 from backend.app.main import app
+from backend.app.models import Scan, Ticket, Volunteer
 from backend.app.seed import seed_reference_data
 
 
@@ -32,6 +33,21 @@ def auth_headers(client: TestClient, username: str, password: str) -> dict[str, 
     response = client.post("/auth/login", json={"username": username, "password": password})
     assert response.status_code == 200
     return {"Authorization": f"Bearer {response.json()['token']}"}
+
+
+def issue_demo_ticket(client: TestClient, headers: dict[str, str]) -> dict:
+    response = client.post(
+        "/tickets",
+        json={
+            "event_id": 1,
+            "attendee_name": "Riya Sen",
+            "attendee_contact": "riya@example.edu",
+            "tier": "premium",
+        },
+        headers=headers,
+    )
+    assert response.status_code == 201
+    return response.json()
 
 
 def test_health() -> None:
@@ -254,3 +270,164 @@ def test_ticket_issuance_validations() -> None:
         headers=user_headers,
     )
     assert res_409.status_code == 409
+
+
+def test_scan_endpoint_requires_scanner_role() -> None:
+    reset_database()
+    client = TestClient(app)
+    user_headers = auth_headers(client, "attendee", "attendee123")
+    admin_headers = auth_headers(client, "admin", "admin123")
+    ticket = issue_demo_ticket(client, user_headers)
+    payload = {"qr_signature": ticket["qr_signature"], "gate_id": 1, "volunteer_id": 1}
+
+    assert client.post("/scans", json=payload).status_code == 401
+    assert client.post("/scans", json=payload, headers=user_headers).status_code == 403
+    assert client.post("/scans", json=payload, headers=admin_headers).status_code == 403
+
+
+def test_scanner_accepts_valid_signed_ticket() -> None:
+    reset_database()
+    client = TestClient(app)
+    user_headers = auth_headers(client, "attendee", "attendee123")
+    scanner_headers = auth_headers(client, "scanner", "scanner123")
+    ticket = issue_demo_ticket(client, user_headers)
+
+    response = client.post(
+        "/scans",
+        json={"qr_signature": ticket["qr_signature"], "gate_id": 1, "volunteer_id": 1},
+        headers=scanner_headers,
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["result"] == "valid"
+    assert body["ticket_id"] == ticket["ticket_id"]
+    assert body["attendee_name"] == "Riya Sen"
+    assert body["tier"] == "premium"
+    assert body["seat_number"] == "PRE-001"
+
+    with SessionLocal() as db:
+        assert db.get(Ticket, ticket["ticket_id"]).status == "used"
+        assert db.query(Scan).filter(Scan.ticket_id == ticket["ticket_id"], Scan.result == "valid").count() == 1
+
+
+def test_scanner_rejects_invalid_signature_and_missing_ticket() -> None:
+    reset_database()
+    client = TestClient(app)
+    scanner_headers = auth_headers(client, "scanner", "scanner123")
+
+    invalid_signature = client.post(
+        "/scans",
+        json={"qr_signature": "TX-999.not-a-valid-signature", "gate_id": 1, "volunteer_id": 1},
+        headers=scanner_headers,
+    )
+    missing_ticket = client.post(
+        "/scans",
+        json={"ticket_id": 999, "gate_id": 1, "volunteer_id": 1},
+        headers=scanner_headers,
+    )
+
+    assert invalid_signature.status_code == 200
+    assert invalid_signature.json()["result"] == "invalid"
+    assert missing_ticket.status_code == 404
+    assert missing_ticket.json()["detail"] == "Ticket not found"
+
+
+def test_scanner_rejects_revoked_ticket_and_records_attempt() -> None:
+    reset_database()
+    client = TestClient(app)
+    user_headers = auth_headers(client, "attendee", "attendee123")
+    scanner_headers = auth_headers(client, "scanner", "scanner123")
+    ticket = issue_demo_ticket(client, user_headers)
+
+    with SessionLocal() as db:
+        stored_ticket = db.get(Ticket, ticket["ticket_id"])
+        stored_ticket.status = "revoked"
+        db.commit()
+
+    response = client.post(
+        "/scans",
+        json={"qr_signature": ticket["qr_signature"], "gate_id": 1, "volunteer_id": 1},
+        headers=scanner_headers,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["result"] == "invalid"
+    assert response.json()["message"] == "Ticket has been revoked."
+    with SessionLocal() as db:
+        assert db.query(Scan).filter(Scan.ticket_id == ticket["ticket_id"], Scan.result == "invalid").count() == 1
+
+
+def test_scanner_rejects_wrong_event_and_volunteer_assignment() -> None:
+    reset_database()
+    client = TestClient(app)
+    user_headers = auth_headers(client, "attendee", "attendee123")
+    admin_headers = auth_headers(client, "admin", "admin123")
+    scanner_headers = auth_headers(client, "scanner", "scanner123")
+    ticket = issue_demo_ticket(client, user_headers)
+
+    event = client.post(
+        "/events",
+        json={
+            "title": "Robotics Expo",
+            "description": "Student robotics demonstrations.",
+            "date_time": "2026-10-01T10:00:00",
+            "venue": "Lab Block",
+            "capacity": 100,
+        },
+        headers=admin_headers,
+    ).json()
+    gate = client.post(
+        "/gates",
+        json={
+            "event_id": event["id"],
+            "name": "Lab Gate",
+            "location": "Block A",
+            "volunteer_name": "Lab Volunteer",
+        },
+        headers=admin_headers,
+    ).json()
+
+    with SessionLocal() as db:
+        lab_volunteer = db.query(Volunteer).filter(Volunteer.gate_id == gate["id"]).one()
+        lab_volunteer_id = lab_volunteer.id
+
+    wrong_event = client.post(
+        "/scans",
+        json={"qr_signature": ticket["qr_signature"], "gate_id": gate["id"], "volunteer_id": lab_volunteer_id},
+        headers=scanner_headers,
+    )
+    wrong_assignment = client.post(
+        "/scans",
+        json={"qr_signature": ticket["qr_signature"], "gate_id": 1, "volunteer_id": 3},
+        headers=scanner_headers,
+    )
+
+    assert wrong_event.status_code == 200
+    assert wrong_event.json()["result"] == "invalid"
+    assert wrong_event.json()["message"] == "Ticket does not belong to this gate's event."
+    assert wrong_assignment.status_code == 403
+
+
+def test_scanner_reports_missing_gate_and_volunteer() -> None:
+    reset_database()
+    client = TestClient(app)
+    user_headers = auth_headers(client, "attendee", "attendee123")
+    scanner_headers = auth_headers(client, "scanner", "scanner123")
+    ticket = issue_demo_ticket(client, user_headers)
+
+    missing_gate = client.post(
+        "/scans",
+        json={"qr_signature": ticket["qr_signature"], "gate_id": 999, "volunteer_id": 1},
+        headers=scanner_headers,
+    )
+    missing_volunteer = client.post(
+        "/scans",
+        json={"qr_signature": ticket["qr_signature"], "gate_id": 1, "volunteer_id": 999},
+        headers=scanner_headers,
+    )
+
+    assert missing_gate.status_code == 404
+    assert missing_gate.json()["detail"] == "Gate not found"
+    assert missing_volunteer.status_code == 404
+    assert missing_volunteer.json()["detail"] == "Volunteer not found"

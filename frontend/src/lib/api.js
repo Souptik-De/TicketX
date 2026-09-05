@@ -69,3 +69,10 @@ export function issueTicket(payload) {
 export function getTicket(ticketId) {
   return request(`/tickets/${ticketId}`);
 }
+
+export function scanTicket(payload) {
+  return request("/scans", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
