@@ -20,7 +20,13 @@ async function request(path, options) {
 
   if (!response.ok) {
     const problem = await response.json().catch(() => ({ detail: "Request failed" }));
-    throw new Error(problem.detail ?? "Request failed");
+    let message = "Request failed";
+    if (typeof problem.detail === "string") {
+      message = problem.detail;
+    } else if (Array.isArray(problem.detail)) {
+      message = problem.detail.map((e) => e.msg || JSON.stringify(e)).join(", ");
+    }
+    throw new Error(message);
   }
 
   if (response.status === 204) return null;
