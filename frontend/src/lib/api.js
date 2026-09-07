@@ -23,6 +23,7 @@ async function request(path, options) {
     throw new Error(problem.detail ?? "Request failed");
   }
 
+  if (response.status === 204) return null;
   return response.json();
 }
 

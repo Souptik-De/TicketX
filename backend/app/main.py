@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from .auth import create_token, hash_password, require_roles, verify_password
 from .database import SessionLocal, create_database, get_db
-from .models import Event, Gate, Ticket, User, Volunteer
+from .models import Event, Gate, Scan, Ticket, User, Volunteer
 from .schemas import (
     EventCreate,
     EventOut,
@@ -111,8 +111,18 @@ def delete_event(event_id: int, _: User = Depends(require_roles("admin")), db: S
     if event is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
 
-    db.query(Scan).filter(Scan.ticket_id.in_(db.query(Ticket.id).filter(Ticket.event_id == event_id))).delete(synchronize_session=False)
+    # Delete scans for tickets belonging to this event
+    ticket_ids = db.query(Ticket.id).filter(Ticket.event_id == event_id).subquery()
+    db.query(Scan).filter(Scan.ticket_id.in_(ticket_ids)).delete(synchronize_session=False)
+
+    # Delete tickets for this event
     db.query(Ticket).filter(Ticket.event_id == event_id).delete(synchronize_session=False)
+
+    # Delete volunteers assigned to gates for this event
+    gate_ids = db.query(Gate.id).filter(Gate.event_id == event_id).subquery()
+    db.query(Volunteer).filter(Volunteer.gate_id.in_(gate_ids)).delete(synchronize_session=False)
+
+    # Delete gates for this event
     db.query(Gate).filter(Gate.event_id == event_id).delete(synchronize_session=False)
 
     db.delete(event)

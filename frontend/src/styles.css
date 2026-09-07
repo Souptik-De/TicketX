@@ -513,6 +513,53 @@ a {
   line-height: 1.35;
 }
 
+.role-card {
+  transition: transform 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.role-card-active {
+  background: var(--surface-solid);
+}
+
+.auth-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.auth-tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 42px;
+  padding: 10px 16px;
+  border: none;
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-weight: 850;
+  font-size: 0.88rem;
+  cursor: pointer;
+  transition: background 160ms ease, color 160ms ease;
+}
+
+.auth-tab:first-child {
+  border-right: 1px solid var(--line);
+}
+
+.auth-tab:hover {
+  background: var(--page-strong);
+}
+
+.auth-tab-active {
+  background: var(--surface-solid);
+  color: var(--brand);
+  box-shadow: inset 0 -2px 0 var(--brand);
+}
+
 .topbar {
   display: grid;
   grid-template-columns: minmax(220px, 1fr) auto;
