@@ -1,6 +1,8 @@
 import { useRef, useState } from "react";
-import { Download, TicketCheck } from "lucide-react";
+import { Check, Copy, Download, TicketCheck } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
+
+import { normalizeTxPayload } from "../lib/ticketQr";
 
 function safeFileName(value) {
   return value
@@ -37,6 +39,31 @@ function drawWrappedText(context, text, x, y, maxWidth, lineHeight, maxLines = 2
 export function TicketPreview({ ticket }) {
   const qrRef = useRef(null);
   const [downloadError, setDownloadError] = useState("");
+  const [copyState, setCopyState] = useState("idle");
+
+  const txPayload = normalizeTxPayload(ticket?.qr_signature);
+
+  async function handleCopyTx() {
+    if (!txPayload) return;
+    try {
+      await navigator.clipboard.writeText(txPayload);
+      setCopyState("copied");
+    } catch {
+      try {
+        const area = document.createElement("textarea");
+        area.value = txPayload;
+        document.body.appendChild(area);
+        area.select();
+        document.execCommand("copy");
+        area.remove();
+        setCopyState("copied");
+      } catch {
+        setCopyState("failed");
+      }
+    } finally {
+      window.setTimeout(() => setCopyState("idle"), 1600);
+    }
+  }
 
   if (!ticket) {
     return (
@@ -180,10 +207,20 @@ export function TicketPreview({ ticket }) {
         </dl>
       </div>
       <div className="qr-wrap" ref={qrRef} aria-label="Ticket QR code">
-        <QRCodeSVG value={ticket.qr_signature} size={180} level="M" includeMargin />
+        <QRCodeSVG value={txPayload} size={180} level="M" includeMargin />
         <span>Ticket #{ticket.ticket_id}</span>
         <strong>{ticket.seat_number}</strong>
       </div>
+      <div className="tx-copy-row">
+        <code className="tx-payload" title={txPayload}>
+          {txPayload}
+        </code>
+        <button className="ghost-button tx-copy-button" type="button" onClick={handleCopyTx} aria-label="Copy ticket TX payload">
+          {copyState === "copied" ? <Check size={16} aria-hidden="true" /> : <Copy size={16} aria-hidden="true" />}
+          {copyState === "copied" ? "Copied" : copyState === "failed" ? "Copy failed" : "Copy TX"}
+        </button>
+      </div>
+      <p className="muted-text tx-hint">Scan this QR or paste the TX above at the gate. Both use the same TX.</p>
       {downloadError && <p className="error-text ticket-download-error">{downloadError}</p>}
       <button className="ghost-button" type="button" onClick={handleDownload}>
         <Download size={18} aria-hidden="true" />
