@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Response, status
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, joinedload, subqueryload
 
 from .auth import create_token, hash_password, require_roles, verify_password
 from .database import SessionLocal, create_database, get_db
@@ -87,7 +87,7 @@ def me(current_user: User = Depends(require_roles("user", "admin", "scanner"))) 
 
 @app.get("/events", response_model=list[EventOut])
 def list_events(db: Session = Depends(get_db)) -> list[Event]:
-    return db.query(Event).order_by(Event.date_time.asc()).all()
+    return db.query(Event).options(subqueryload(Event.tickets)).order_by(Event.date_time.asc()).all()
 
 
 @app.post("/events", response_model=EventOut, status_code=status.HTTP_201_CREATED)
@@ -118,8 +118,12 @@ def delete_event(event_id: int, _: User = Depends(require_roles("admin")), db: S
     # Delete tickets for this event
     db.query(Ticket).filter(Ticket.event_id == event_id).delete(synchronize_session=False)
 
-    # Delete volunteers assigned to gates for this event
+    # Delete scans performed by volunteers assigned to gates for this event
     gate_ids = db.query(Gate.id).filter(Gate.event_id == event_id).subquery()
+    volunteer_ids = db.query(Volunteer.id).filter(Volunteer.gate_id.in_(gate_ids)).subquery()
+    db.query(Scan).filter(Scan.volunteer_id.in_(volunteer_ids)).delete(synchronize_session=False)
+
+    # Delete volunteers assigned to gates for this event
     db.query(Volunteer).filter(Volunteer.gate_id.in_(gate_ids)).delete(synchronize_session=False)
 
     # Delete gates for this event

@@ -33,7 +33,7 @@ function App() {
   const [theme, setTheme] = useState(() => localStorage.getItem("ticketx-theme") ?? "light");
   const [view, setView] = useState("home");
   const [requestedRole, setRequestedRole] = useState("user");
-  const [selectedEventId, setSelectedEventId] = useState("");
+  const [selectedEventId, setSelectedEventId] = useState(null);
   const [events, setEvents] = useState([]);
   const [isLoadingEvents, setIsLoadingEvents] = useState(true);
   const [volunteers, setVolunteers] = useState([]);
@@ -154,7 +154,7 @@ function App() {
 
   function handleLogout() {
     clearSession();
-    setSelectedEventId("");
+    setSelectedEventId(null);
     setView("home");
   }
 
@@ -267,7 +267,7 @@ function App() {
           onGateCreated={() => refreshDirectory()}
           onEventDeleted={(eventId) => {
             setEvents((current) => current.filter((e) => e.id !== eventId));
-            if (selectedEventId === eventId) setSelectedEventId("");
+            if (selectedEventId === eventId) setSelectedEventId(null);
           }}
         />
       )}

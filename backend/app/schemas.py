@@ -1,5 +1,7 @@
 from datetime import datetime
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 
@@ -12,7 +14,7 @@ class RegisterRequest(BaseModel):
     username: str = Field(min_length=3, max_length=80)
     password: str = Field(min_length=3, max_length=120)
     display_name: str = Field(min_length=2, max_length=120)
-    role: str = Field(default="user", max_length=24)
+    role: Literal["user", "admin", "scanner"] = Field(default="user")
 
 
 class UserOut(BaseModel):

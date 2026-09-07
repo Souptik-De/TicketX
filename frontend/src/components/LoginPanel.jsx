@@ -66,7 +66,12 @@ export function LoginPanel({ initialRole = "user", onBack, onLogin }) {
       }
       setAuthToken(session.token);
       localStorage.setItem("ticketx-user", JSON.stringify(session.user));
-      onLogin(session.user);
+      if (!isRegistering && session.user.role !== selectedRole) {
+        setError(`This account has the "${session.user.role}" role, not "${selectedRole}". You'll enter the ${session.user.role} workspace.`);
+        setTimeout(() => onLogin(session.user), 2000);
+      } else {
+        onLogin(session.user);
+      }
     } catch (err) {
       setAuthToken("");
       setError(err instanceof Error ? err.message : isRegistering ? "Registration failed" : "Login failed");
