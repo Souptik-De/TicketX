@@ -15,7 +15,7 @@ const roleAccounts = [
     role: "admin",
     title: "Admin",
     icon: ShieldCheck,
-    note: "Create events and manage gates.",
+    note: "Sign in to manage events and gates.",
     color: "#6d28d9",
   },
   {
@@ -41,6 +41,9 @@ export function LoginPanel({ initialRole = "user", onBack, onLogin }) {
 
   function handleRoleSwitch(role) {
     setSelectedRole(role);
+    if (role === "admin") {
+      setIsRegistering(false);
+    }
     setError("");
     setUsername("");
     setPassword("");
@@ -55,6 +58,11 @@ export function LoginPanel({ initialRole = "user", onBack, onLogin }) {
     try {
       let session;
       if (isRegistering) {
+        if (selectedRole === "admin") {
+          setError("Admin registration is not available. Please sign in with administrator credentials.");
+          setIsSubmitting(false);
+          return;
+        }
         session = await register({
           username,
           password,
@@ -128,25 +136,31 @@ export function LoginPanel({ initialRole = "user", onBack, onLogin }) {
             </div>
           </div>
 
-          {/* Login / Register toggle tabs */}
-          <div className="auth-tabs">
-            <button
-              type="button"
-              className={`auth-tab${!isRegistering ? " auth-tab-active" : ""}`}
-              onClick={() => { setIsRegistering(false); setError(""); }}
-            >
-              <LockKeyhole size={16} aria-hidden="true" />
-              Login
-            </button>
-            <button
-              type="button"
-              className={`auth-tab${isRegistering ? " auth-tab-active" : ""}`}
-              onClick={() => { setIsRegistering(true); setError(""); }}
-            >
-              <UserPlus size={16} aria-hidden="true" />
-              Register
-            </button>
-          </div>
+          {/* Login / Register toggle tabs - only for non-admin roles */}
+          {selectedRole !== "admin" ? (
+            <div className="auth-tabs">
+              <button
+                type="button"
+                className={`auth-tab${!isRegistering ? " auth-tab-active" : ""}`}
+                onClick={() => { setIsRegistering(false); setError(""); }}
+              >
+                <LockKeyhole size={16} aria-hidden="true" />
+                Login
+              </button>
+              <button
+                type="button"
+                className={`auth-tab${isRegistering ? " auth-tab-active" : ""}`}
+                onClick={() => { setIsRegistering(true); setError(""); }}
+              >
+                <UserPlus size={16} aria-hidden="true" />
+                Register
+              </button>
+            </div>
+          ) : (
+            <div style={{ fontSize: "0.82rem", color: "var(--muted)", padding: "2px 0" }}>
+              Admin accounts are pre-configured. Registration is disabled.
+            </div>
+          )}
 
           {isRegistering && (
             <label>

@@ -4,9 +4,9 @@ import { Armchair, CalendarDays, Send } from "lucide-react";
 import { getTicket, issueTicket } from "../lib/api";
 
 export function TicketIssuer({ events, initialEventId, onTicketIssued }) {
-  const [name, setName] = useState("Riya Sen");
-  const [email, setEmail] = useState("riya@example.edu");
-  const [campusId, setCampusId] = useState("CAMP-2026-042");
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [campusId, setCampusId] = useState("");
   const [tier, setTier] = useState("general");
   const [eventId, setEventId] = useState(initialEventId || "");
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -91,15 +91,31 @@ export function TicketIssuer({ events, initialEventId, onTicketIssued }) {
         )}
         <label>
           Attendee name
-          <input value={name} onChange={(eventObject) => setName(eventObject.target.value)} required minLength={2} />
+          <input
+            value={name}
+            onChange={(eventObject) => setName(eventObject.target.value)}
+            placeholder="Enter attendee full name"
+            required
+            minLength={2}
+          />
         </label>
         <label>
           Email
-          <input type="email" value={email} onChange={(eventObject) => setEmail(eventObject.target.value)} required />
+          <input
+            type="email"
+            value={email}
+            onChange={(eventObject) => setEmail(eventObject.target.value)}
+            placeholder="Enter email address"
+            required
+          />
         </label>
         <label>
           Campus ID
-          <input value={campusId} onChange={(eventObject) => setCampusId(eventObject.target.value)} />
+          <input
+            value={campusId}
+            onChange={(eventObject) => setCampusId(eventObject.target.value)}
+            placeholder="Optional campus ID"
+          />
         </label>
         <label>
           Tier

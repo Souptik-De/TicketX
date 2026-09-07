@@ -64,6 +64,8 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)) -> LoginResponse
 
 @app.post("/auth/register", response_model=LoginResponse, status_code=status.HTTP_201_CREATED)
 def register(payload: RegisterRequest, db: Session = Depends(get_db)) -> LoginResponse:
+    if payload.role == "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin registration is not allowed")
     username = payload.username.strip().lower()
     if db.query(User).filter(User.username == username).first():
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Username already exists")

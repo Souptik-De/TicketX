@@ -582,3 +582,65 @@ def test_gate_status_role_protection() -> None:
     # Admin and scanner roles allowed
     assert client.get("/gates/status", headers=admin_headers).status_code == 200
     assert client.get("/gates/status", headers=scanner_headers).status_code == 200
+
+
+def test_registration_allowed_roles() -> None:
+    reset_database()
+    client = TestClient(app)
+
+    # User registration succeeds
+    user_res = client.post(
+        "/auth/register",
+        json={
+            "username": "newuser",
+            "password": "password123",
+            "display_name": "New User",
+            "role": "user",
+        },
+    )
+    assert user_res.status_code == 201
+    assert user_res.json()["user"]["role"] == "user"
+    assert user_res.json()["user"]["username"] == "newuser"
+
+    # Scanner registration succeeds
+    scanner_res = client.post(
+        "/auth/register",
+        json={
+            "username": "newscanner",
+            "password": "password123",
+            "display_name": "New Scanner",
+            "role": "scanner",
+        },
+    )
+    assert scanner_res.status_code == 201
+    assert scanner_res.json()["user"]["role"] == "scanner"
+
+    # Duplicate username fails
+    dup_res = client.post(
+        "/auth/register",
+        json={
+            "username": "newuser",
+            "password": "password123",
+            "display_name": "Duplicate User",
+            "role": "user",
+        },
+    )
+    assert dup_res.status_code == 409
+
+
+def test_admin_registration_rejected() -> None:
+    reset_database()
+    client = TestClient(app)
+
+    # Admin role is rejected (FastAPI schema rejects invalid role value with 422)
+    admin_res = client.post(
+        "/auth/register",
+        json={
+            "username": "newadmin",
+            "password": "password123",
+            "display_name": "New Admin",
+            "role": "admin",
+        },
+    )
+    assert admin_res.status_code in (422, 403)
+
