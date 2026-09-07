@@ -33,6 +33,13 @@ export function login(payload) {
   });
 }
 
+export function register(payload) {
+  return request("/auth/register", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
 export function getEvents() {
   return request("/events");
 }
@@ -46,6 +53,12 @@ export function createEvent(payload) {
   return request("/events", {
     method: "POST",
     body: JSON.stringify(payload),
+  });
+}
+
+export function deleteEvent(eventId) {
+  return request(`/events/${eventId}`, {
+    method: "DELETE",
   });
 }
 

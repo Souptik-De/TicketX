@@ -1,9 +1,9 @@
 import { useState } from "react";
-import { Armchair, CalendarPlus, DoorOpen, MapPin, Plus, UsersRound } from "lucide-react";
+import { Armchair, CalendarPlus, DoorOpen, MapPin, Plus, UsersRound, Trash2 } from "lucide-react";
 
-import { createEvent, createGate } from "../lib/api";
+import { createEvent, createGate, deleteEvent } from "../lib/api";
 
-export function AdminPanel({ events, gates, selectedEventId, onEventChange, onEventCreated, onGateCreated }) {
+export function AdminPanel({ events, gates, selectedEventId, onEventChange, onEventCreated, onGateCreated, onEventDeleted }) {
   const [title, setTitle] = useState("Freshers Night 2026");
   const [description, setDescription] = useState(
     "An evening of live performances, student showcases, food stalls, and campus celebrations.",
@@ -18,6 +18,7 @@ export function AdminPanel({ events, gates, selectedEventId, onEventChange, onEv
   const [error, setError] = useState("");
   const [isSavingEvent, setIsSavingEvent] = useState(false);
   const [isSavingGate, setIsSavingGate] = useState(false);
+  const [isDeletingEvent, setIsDeletingEvent] = useState(false);
 
   const selectedEvent = events.find((event) => event.id === Number(selectedEventId)) ?? events[0];
   const selectedEventGates = selectedEvent ? gates.filter((gate) => gate.event_id === selectedEvent.id) : [];
@@ -72,6 +73,25 @@ export function AdminPanel({ events, gates, selectedEventId, onEventChange, onEv
       setError(err instanceof Error ? err.message : "Could not create gate");
     } finally {
       setIsSavingGate(false);
+    }
+  }
+
+  async function handleDeleteEvent(eventId, eventObject) {
+    eventObject.stopPropagation();
+    if (!window.confirm("Are you sure you want to delete this event? This action cannot be undone.")) return;
+
+    setError("");
+    setMessage("");
+    setIsDeletingEvent(true);
+
+    try {
+      await deleteEvent(eventId);
+      onEventDeleted(eventId);
+      setMessage("Event deleted successfully.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not delete event");
+    } finally {
+      setIsDeletingEvent(false);
     }
   }
 
@@ -204,9 +224,20 @@ export function AdminPanel({ events, gates, selectedEventId, onEventChange, onEv
                     })}
                   </span>
                 </span>
-                <span className="seat-total">
-                  <b>{event.issued_count}</b>
-                  <small>of {event.capacity} issued</small>
+                <span className="seat-total" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.5rem' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                    <b>{event.issued_count}</b>
+                    <small>of {event.capacity} issued</small>
+                  </div>
+                  <button 
+                    type="button" 
+                    onClick={(e) => handleDeleteEvent(event.id, e)} 
+                    disabled={isDeletingEvent}
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'red', marginTop: '0.5rem' }}
+                    title="Delete Event"
+                  >
+                    <Trash2 size={18} aria-hidden="true" />
+                  </button>
                 </span>
               </button>
             ))}

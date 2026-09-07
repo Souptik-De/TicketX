@@ -265,6 +265,10 @@ function App() {
             setSelectedEventId(event.id);
           }}
           onGateCreated={() => refreshDirectory()}
+          onEventDeleted={(eventId) => {
+            setEvents((current) => current.filter((e) => e.id !== eventId));
+            if (selectedEventId === eventId) setSelectedEventId("");
+          }}
         />
       )}
 

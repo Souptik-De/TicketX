@@ -1,7 +1,7 @@
 import { useState } from "react";
-import { ArrowLeft, LockKeyhole, ScanLine, ShieldCheck, UserRound } from "lucide-react";
+import { ArrowLeft, LockKeyhole, ScanLine, ShieldCheck, UserRound, UserPlus } from "lucide-react";
 
-import { login, setAuthToken } from "../lib/api";
+import { login, register, setAuthToken } from "../lib/api";
 
 const demoAccounts = [
   {
@@ -34,8 +34,10 @@ export function LoginPanel({ initialRole = "user", onBack, onLogin }) {
   const initialAccount = demoAccounts.find((account) => account.role === initialRole) ?? demoAccounts[0];
   const [username, setUsername] = useState(initialAccount.username);
   const [password, setPassword] = useState(initialAccount.password);
+  const [displayName, setDisplayName] = useState("");
   const [error, setError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isRegistering, setIsRegistering] = useState(false);
 
   async function handleSubmit(event) {
     event.preventDefault();
@@ -43,13 +45,18 @@ export function LoginPanel({ initialRole = "user", onBack, onLogin }) {
     setIsSubmitting(true);
 
     try {
-      const session = await login({ username, password });
+      let session;
+      if (isRegistering) {
+        session = await register({ username, password, display_name: displayName, role: initialRole });
+      } else {
+        session = await login({ username, password });
+      }
       setAuthToken(session.token);
       localStorage.setItem("ticketx-user", JSON.stringify(session.user));
       onLogin(session.user);
     } catch (err) {
       setAuthToken("");
-      setError(err instanceof Error ? err.message : "Login failed");
+      setError(err instanceof Error ? err.message : (isRegistering ? "Registration failed" : "Login failed"));
     } finally {
       setIsSubmitting(false);
     }
@@ -75,9 +82,15 @@ export function LoginPanel({ initialRole = "user", onBack, onLogin }) {
       <section className="login-grid">
         <form className="panel login-card" onSubmit={handleSubmit}>
           <div className="section-heading">
-            <LockKeyhole size={26} aria-hidden="true" />
-            <h2>Login</h2>
+            {isRegistering ? <UserPlus size={26} aria-hidden="true" /> : <LockKeyhole size={26} aria-hidden="true" />}
+            <h2>{isRegistering ? "Register" : "Login"}</h2>
           </div>
+          {isRegistering && (
+            <label>
+              Display Name
+              <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} required />
+            </label>
+          )}
           <label>
             Username
             <input value={username} onChange={(event) => setUsername(event.target.value)} required />
@@ -88,8 +101,11 @@ export function LoginPanel({ initialRole = "user", onBack, onLogin }) {
           </label>
           {error && <p className="error-text">{error}</p>}
           <button className="primary-button" disabled={isSubmitting} type="submit">
-            <LockKeyhole size={18} aria-hidden="true" />
-            {isSubmitting ? "Signing in..." : "Sign in"}
+            {isRegistering ? <UserPlus size={18} aria-hidden="true" /> : <LockKeyhole size={18} aria-hidden="true" />}
+            {isSubmitting ? (isRegistering ? "Registering..." : "Signing in...") : (isRegistering ? "Register" : "Sign in")}
+          </button>
+          <button type="button" onClick={() => setIsRegistering(!isRegistering)} style={{ background: 'none', border: 'none', cursor: 'pointer', marginTop: '1rem', color: 'inherit', textDecoration: 'underline' }}>
+            {isRegistering ? "Already have an account? Login" : "Don't have an account? Register"}
           </button>
         </form>
 

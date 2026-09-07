@@ -8,6 +8,13 @@ class LoginRequest(BaseModel):
     password: str = Field(min_length=3, max_length=120)
 
 
+class RegisterRequest(BaseModel):
+    username: str = Field(min_length=3, max_length=80)
+    password: str = Field(min_length=3, max_length=120)
+    display_name: str = Field(min_length=2, max_length=120)
+    role: str = Field(default="user", max_length=24)
+
+
 class UserOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

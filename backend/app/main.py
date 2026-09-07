@@ -5,7 +5,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session, joinedload
 
-from .auth import create_token, require_roles, verify_password
+from .auth import create_token, hash_password, require_roles, verify_password
 from .database import SessionLocal, create_database, get_db
 from .models import Event, Gate, Ticket, User, Volunteer
 from .schemas import (
@@ -16,6 +16,7 @@ from .schemas import (
     GateStatus,
     LoginRequest,
     LoginResponse,
+    RegisterRequest,
     ScanCreate,
     ScanResult,
     TicketCreate,
@@ -61,6 +62,24 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)) -> LoginResponse
     return LoginResponse(token=create_token(user), user=UserOut.model_validate(user))
 
 
+@app.post("/auth/register", response_model=LoginResponse, status_code=status.HTTP_201_CREATED)
+def register(payload: RegisterRequest, db: Session = Depends(get_db)) -> LoginResponse:
+    username = payload.username.strip().lower()
+    if db.query(User).filter(User.username == username).first():
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Username already exists")
+
+    user = User(
+        username=username,
+        password_hash=hash_password(payload.password),
+        display_name=payload.display_name.strip(),
+        role=payload.role
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return LoginResponse(token=create_token(user), user=UserOut.model_validate(user))
+
+
 @app.get("/auth/me", response_model=UserOut)
 def me(current_user: User = Depends(require_roles("user", "admin", "scanner"))) -> User:
     return current_user
@@ -84,6 +103,21 @@ def create_event(payload: EventCreate, _: User = Depends(require_roles("admin"))
     db.commit()
     db.refresh(event)
     return event
+
+
+@app.delete("/events/{event_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_event(event_id: int, _: User = Depends(require_roles("admin")), db: Session = Depends(get_db)):
+    event = db.get(Event, event_id)
+    if event is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
+
+    db.query(Scan).filter(Scan.ticket_id.in_(db.query(Ticket.id).filter(Ticket.event_id == event_id))).delete(synchronize_session=False)
+    db.query(Ticket).filter(Ticket.event_id == event_id).delete(synchronize_session=False)
+    db.query(Gate).filter(Gate.event_id == event_id).delete(synchronize_session=False)
+
+    db.delete(event)
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @app.get("/volunteers", response_model=list[VolunteerOut])
