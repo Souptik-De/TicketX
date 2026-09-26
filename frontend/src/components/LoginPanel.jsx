@@ -10,21 +10,18 @@ const roleAccounts = [
     title: "User",
     icon: UserRound,
     note: "Get tickets for available events.",
-    color: "#0d8068",
   },
   {
     role: "admin",
     title: "Admin",
     icon: ShieldCheck,
-    note: "Sign in to manage events and gates.",
-    color: "#6d28d9",
+    note: "Manage events and gates.",
   },
   {
     role: "scanner",
     title: "Scanner",
     icon: ScanLine,
     note: "Validate tickets at entry gates.",
-    color: "#d97706",
   },
 ];
 
@@ -148,9 +145,8 @@ export function LoginPanel({ initialRole = "user", onBack, onLogin }) {
                 key={account.role}
                 type="button"
                 onClick={() => handleRoleSwitch(account.role)}
-                style={isActive ? { borderColor: account.color, boxShadow: `0 0 0 2px ${account.color}33` } : {}}
               >
-                <Icon size={22} aria-hidden="true" style={isActive ? { color: account.color } : {}} />
+                <Icon size={22} aria-hidden="true" />
                 <span>
                   <strong>{account.title}</strong>
                   <em>{account.note}</em>
@@ -162,18 +158,18 @@ export function LoginPanel({ initialRole = "user", onBack, onLogin }) {
 
         {/* Login / Register form */}
         <form className="panel login-card" onSubmit={handleSubmit}>
-          <div className="section-heading" style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-            <RoleIcon size={26} aria-hidden="true" style={{ color: currentRoleInfo.color }} />
+          <div className="section-heading login-title">
+            <RoleIcon size={26} aria-hidden="true" />
             <div>
-              <p className="eyebrow" style={{ margin: 0, fontSize: "0.72rem" }}>
+              <p className="eyebrow">
                 {currentRoleInfo.title} Account
               </p>
-              <h2 style={{ margin: 0 }}>{isRegistering ? "Register" : "Login"}</h2>
+              <h2>{isRegistering ? "Register" : "Login"}</h2>
             </div>
           </div>
 
           {/* Login / Register toggle tabs - only for non-admin roles */}
-          {selectedRole !== "admin" ? (
+          {selectedRole !== "admin" && (
             <div className="auth-tabs">
               <button
                 type="button"
@@ -191,10 +187,6 @@ export function LoginPanel({ initialRole = "user", onBack, onLogin }) {
                 <UserPlus size={16} aria-hidden="true" />
                 Register
               </button>
-            </div>
-          ) : (
-            <div style={{ fontSize: "0.82rem", color: "var(--muted)", padding: "2px 0" }}>
-              Admin accounts are pre-configured. Registration is disabled.
             </div>
           )}
 
@@ -233,7 +225,6 @@ export function LoginPanel({ initialRole = "user", onBack, onLogin }) {
             className="primary-button"
             disabled={isSubmitting}
             type="submit"
-            style={{ background: `linear-gradient(135deg, ${currentRoleInfo.color}, ${currentRoleInfo.color}cc)` }}
           >
             {isRegistering ? (
               <UserPlus size={18} aria-hidden="true" />
