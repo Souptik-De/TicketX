@@ -3,6 +3,7 @@ import { ArrowLeft, LockKeyhole, ScanLine, ShieldCheck, UserRound, UserPlus } fr
 import { GoogleLogin, GoogleOAuthProvider } from "@react-oauth/google";
 
 import { googleLogin, login, register, setAuthToken } from "../lib/api";
+import { TicketXLogo } from "./TicketXLogo";
 
 const roleAccounts = [
   {
@@ -132,7 +133,10 @@ export function LoginPanel({ initialRole = "user", onBack, onLogin }) {
           Back to events
         </button>
         <p className="eyebrow">Secure Entry System</p>
-        <h1>TicketX</h1>
+        <h1 className="brand-title">
+          <TicketXLogo size={44} />
+          TicketX
+        </h1>
         <p>Sign in or create an account to issue tickets, manage events, or scan QR codes at the gate.</p>
       </section>
 

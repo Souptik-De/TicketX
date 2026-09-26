@@ -12,6 +12,8 @@ import {
   UserRound,
 } from "lucide-react";
 
+import { TicketXLogo } from "./TicketXLogo";
+
 const roles = [
   { id: "user", label: "User", icon: UserRound },
   { id: "admin", label: "Admin", icon: ShieldCheck },
@@ -43,7 +45,7 @@ export function HomePage({ events, isLoading, error, sessionUser, theme, onTheme
     <main className="home-shell" id="top">
       <header className="home-nav">
         <a className="home-brand" href="#top" aria-label="TicketX home">
-          <Ticket size={23} aria-hidden="true" />
+          <TicketXLogo size={26} />
           <strong>TicketX</strong>
         </a>
         <nav className="home-actions" aria-label="Account workspaces">

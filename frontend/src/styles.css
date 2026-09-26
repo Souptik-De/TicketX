@@ -600,6 +600,17 @@ a {
   letter-spacing: 0;
 }
 
+.brand-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.home-brand svg,
+.brand-title svg {
+  flex: 0 0 auto;
+}
+
 .top-actions {
   display: flex;
   align-items: center;

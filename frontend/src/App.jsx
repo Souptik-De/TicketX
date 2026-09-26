@@ -11,6 +11,7 @@ import { ScannerPanel } from "./components/ScannerPanel";
 import { ScanResultCard } from "./components/ScanResultCard";
 import { TicketIssuer } from "./components/TicketIssuer";
 import { TicketPreview } from "./components/TicketPreview";
+import { TicketXLogo } from "./components/TicketXLogo";
 
 const workspaces = {
   user: { id: "user", label: "User workspace", icon: UserRound },
@@ -204,7 +205,10 @@ function App() {
       <header className="topbar">
         <div className="brand-block">
           <p className="eyebrow">Secure Entry System</p>
-          <h1>TicketX</h1>
+          <h1 className="brand-title">
+            <TicketXLogo size={30} />
+            TicketX
+          </h1>
         </div>
         <div className="top-actions">
           <button className="theme-toggle" type="button" onClick={() => setView("home")} aria-label="Return to events">
