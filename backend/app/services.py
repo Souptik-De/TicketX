@@ -4,7 +4,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
-from .models import Attendee, Event, Gate, Scan, Ticket, Volunteer
+from .models import Attendee, Event, Gate, Scan, Ticket, User, Volunteer
 from .schemas import (
     EventStatsGate,
     EventStatsOut,
@@ -305,3 +305,73 @@ def get_event_stats(db: Session, event_id: int) -> EventStatsOut:
         gate_breakdown=gate_breakdown,
         tickets=ticket_rows,
     )
+
+
+def _username_from_email(db: Session, email: str, sub: str) -> str:
+    local = email.split("@")[0].lower() if "@" in email else email.lower()
+    cleaned = "".join(ch for ch in local if ch.isalnum() or ch in ("_", ".", "-")).strip("._-")
+    if len(cleaned) < 3:
+        cleaned = f"user_{sub[:6].lower()}"
+    base = cleaned[:70]
+    candidate = base
+    suffix = 1
+    while db.query(User).filter(User.username == candidate).first():
+        tail = f"_{sub[:6].lower()}" if suffix == 1 else f"_{suffix}"
+        candidate = f"{base[: 80 - len(tail)]}{tail}"
+        suffix += 1
+        if suffix > 20:
+            candidate = f"{base[:60]}_{sub[:12].lower()}"
+            break
+    return candidate[:80]
+
+
+def get_or_create_google_user(db: Session, google_info: dict, role: str = "user") -> User:
+    if role not in ("user", "scanner"):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Google login is not allowed for this role")
+
+    sub = str(google_info.get("sub", "")).strip()
+    email = str(google_info.get("email", "")).strip().lower()
+    name = str(google_info.get("name", "")).strip()
+    if not sub or not email:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid Google login")
+
+    existing = db.query(User).filter(User.google_sub == sub).one_or_none()
+    if existing:
+        if existing.role != role and existing.role in ("user", "scanner"):
+            existing.role = role
+            db.commit()
+            db.refresh(existing)
+        return existing
+
+    linked = (
+        db.query(User)
+        .filter((User.email == email) | (User.username == email))
+        .order_by(User.id.asc())
+        .first()
+    )
+    if linked:
+        if linked.google_sub and linked.google_sub != sub:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This email is already linked to another Google account")
+        linked.google_sub = sub
+        if not linked.email:
+            linked.email = email
+        if linked.role != role and linked.role in ("user", "scanner"):
+            linked.role = role
+        db.commit()
+        db.refresh(linked)
+        return linked
+
+    username = _username_from_email(db, email, sub)
+    display_name = (name or email.split("@")[0])[:120].strip() or username
+    user = User(
+        username=username,
+        password_hash="",
+        role=role,
+        display_name=display_name,
+        google_sub=sub,
+        email=email,
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return user

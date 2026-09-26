@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { ArrowLeft, LockKeyhole, ScanLine, ShieldCheck, UserRound, UserPlus } from "lucide-react";
+import { GoogleLogin, GoogleOAuthProvider } from "@react-oauth/google";
 
-import { login, register, setAuthToken } from "../lib/api";
+import { googleLogin, login, register, setAuthToken } from "../lib/api";
 
 const roleAccounts = [
   {
@@ -35,6 +36,7 @@ export function LoginPanel({ initialRole = "user", onBack, onLogin }) {
   const [displayName, setDisplayName] = useState("");
   const [error, setError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const googleClientId = import.meta.env.VITE_GOOGLE_CLIENT_ID ?? "";
 
   const currentRoleInfo = roleAccounts.find((r) => r.role === selectedRole) ?? roleAccounts[0];
   const RoleIcon = currentRoleInfo.icon;
@@ -86,6 +88,40 @@ export function LoginPanel({ initialRole = "user", onBack, onLogin }) {
     } finally {
       setIsSubmitting(false);
     }
+  }
+
+  function handleSession(session) {
+    setAuthToken(session.token);
+    localStorage.setItem("ticketx-user", JSON.stringify(session.user));
+    if (session.user.role !== selectedRole) {
+      setError(`This account has the "${session.user.role}" role, not "${selectedRole}". You'll enter the ${session.user.role} workspace.`);
+      setTimeout(() => onLogin(session.user), 2000);
+    } else {
+      onLogin(session.user);
+    }
+  }
+
+  async function handleGoogleSuccess(credentialResponse) {
+    const credential = credentialResponse?.credential;
+    if (!credential) {
+      setError("Google login did not return an account. Please try again.");
+      return;
+    }
+    setError("");
+    setIsSubmitting(true);
+    try {
+      const session = await googleLogin({ id_token: credential, role: selectedRole });
+      handleSession(session);
+    } catch (err) {
+      setAuthToken("");
+      setError(err instanceof Error ? err.message : "Google login failed");
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
+  function handleGoogleError() {
+    setError("Google login was cancelled or failed. Please try again.");
   }
 
   return (
@@ -212,6 +248,25 @@ export function LoginPanel({ initialRole = "user", onBack, onLogin }) {
                 ? `Register as ${currentRoleInfo.title}`
                 : `Sign in as ${currentRoleInfo.title}`}
           </button>
+          {selectedRole !== "admin" && googleClientId && (
+            <>
+              <div className="google-divider">
+                <span>or</span>
+              </div>
+              <div className="google-wrap">
+                <GoogleOAuthProvider clientId={googleClientId}>
+                  <GoogleLogin
+                    onSuccess={handleGoogleSuccess}
+                    onError={handleGoogleError}
+                    text="continue_with"
+                    shape="rectangular"
+                    size="large"
+                    width="100%"
+                  />
+                </GoogleOAuthProvider>
+              </div>
+            </>
+          )}
         </form>
       </section>
     </main>

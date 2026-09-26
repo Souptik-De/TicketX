@@ -31,6 +31,11 @@ class LoginResponse(BaseModel):
     user: UserOut
 
 
+class GoogleLoginRequest(BaseModel):
+    id_token: str = Field(min_length=10, max_length=8000)
+    role: Literal["user", "scanner"] = Field(default="user")
+
+
 class TierCount(BaseModel):
     tier: str
     issued_count: int

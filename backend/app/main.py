@@ -15,6 +15,7 @@ from .schemas import (
     GateCreate,
     GateOut,
     GateStatus,
+    GoogleLoginRequest,
     LoginRequest,
     LoginResponse,
     RegisterRequest,
@@ -27,7 +28,15 @@ from .schemas import (
     VolunteerOut,
 )
 from .seed import seed_reference_data
-from .services import create_gate, get_event_stats, get_gate_status, issue_ticket, record_scan
+from .services import (
+    create_gate,
+    get_event_stats,
+    get_gate_status,
+    get_or_create_google_user,
+    issue_ticket,
+    record_scan,
+)
+from .google_auth import verify_google_id_token
 
 
 @asynccontextmanager
@@ -80,6 +89,15 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)) -> LoginRe
     db.add(user)
     db.commit()
     db.refresh(user)
+    return LoginResponse(token=create_token(user), user=UserOut.model_validate(user))
+
+
+@app.post("/auth/google", response_model=LoginResponse)
+def google_login(payload: GoogleLoginRequest, db: Session = Depends(get_db)) -> LoginResponse:
+    if payload.role == "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin registration is not allowed")
+    google_info = verify_google_id_token(payload.id_token)
+    user = get_or_create_google_user(db, google_info, payload.role)
     return LoginResponse(token=create_token(user), user=UserOut.model_validate(user))
 
 

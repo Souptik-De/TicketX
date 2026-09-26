@@ -11,9 +11,11 @@ class User(Base):
 
     id: Mapped[int] = mapped_column("user_id", Integer, primary_key=True, index=True)
     username: Mapped[str] = mapped_column(String(80), unique=True, nullable=False, index=True)
-    password_hash: Mapped[str] = mapped_column(String(160), nullable=False)
+    password_hash: Mapped[str | None] = mapped_column(String(160), nullable=True)
     role: Mapped[str] = mapped_column(String(24), nullable=False)
     display_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    google_sub: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True, index=True)
+    email: Mapped[str | None] = mapped_column(String(160), nullable=True, index=True)
 
 
 class Attendee(Base):

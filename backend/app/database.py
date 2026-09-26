@@ -43,6 +43,13 @@ def migrate_existing_database() -> None:
     tables = set(inspector.get_table_names())
 
     with engine.begin() as connection:
+        if "users" in tables:
+            user_columns = {column["name"] for column in inspector.get_columns("users")}
+            if "google_sub" not in user_columns:
+                connection.execute(text("ALTER TABLE users ADD COLUMN google_sub VARCHAR(64)"))
+            if "email" not in user_columns:
+                connection.execute(text("ALTER TABLE users ADD COLUMN email VARCHAR(160)"))
+
         if "gates" in tables:
             gate_columns = {column["name"] for column in inspector.get_columns("gates")}
             if "event_id" not in gate_columns:

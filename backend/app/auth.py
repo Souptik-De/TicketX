@@ -23,7 +23,9 @@ def hash_password(password: str) -> str:
     return base64.urlsafe_b64encode(digest).decode()
 
 
-def verify_password(password: str, password_hash: str) -> bool:
+def verify_password(password: str, password_hash: str | None) -> bool:
+    if not password_hash:
+        return False
     return hmac.compare_digest(hash_password(password), password_hash)
 
 

@@ -47,6 +47,13 @@ export function register(payload) {
   });
 }
 
+export function googleLogin(payload) {
+  return request("/auth/google", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
 export function getEvents() {
   return request("/events");
 }

@@ -560,6 +560,31 @@ a {
   box-shadow: inset 0 -2px 0 var(--brand);
 }
 
+.google-divider {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.google-divider::before,
+.google-divider::after {
+  content: "";
+  flex: 1;
+  border-top: 1px solid var(--line);
+}
+
+.google-wrap {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: center;
+}
+
 .topbar {
   display: grid;
   grid-template-columns: minmax(220px, 1fr) auto;
