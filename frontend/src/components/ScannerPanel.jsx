@@ -14,7 +14,9 @@ function describeCameraError(err) {
   return "Camera is unavailable. Paste the TX payload instead.";
 }
 
-export function ScannerPanel({ gates, volunteers, onScanComplete, onGateRefresh }) {
+export function ScannerPanel({ events = [], selectedEventId = "", onEventChange = () => undefined, gates, volunteers, onScanComplete, onGateRefresh }) {
+  const selectedEvent = events.find((event) => event.id === Number(selectedEventId)) ?? events[0];
+  const activeEventId = selectedEvent?.id ?? "";
   const firstGate = gates[0];
   const [qrValue, setQrValue] = useState("");
   const [gateId, setGateId] = useState(firstGate?.id ?? "");
@@ -27,12 +29,23 @@ export function ScannerPanel({ gates, volunteers, onScanComplete, onGateRefresh 
   const decodedOnceRef = useRef(false);
 
   useEffect(() => {
-    setGateId((current) => current || firstGate?.id || "");
-  }, [firstGate]);
+    setGateId((current) => {
+      const ids = new Set(gates.map((gate) => Number(gate.id)));
+      if (ids.size === 0) return "";
+      if (current && ids.has(Number(current))) return current;
+      return gates[0].id;
+    });
+  }, [gates, activeEventId]);
+
+  const eventVolunteers = useMemo(() => {
+    if (gates.length === 0) return [];
+    const gateIds = new Set(gates.map((gate) => Number(gate.id ?? gate.gate_id)));
+    return volunteers.filter((volunteer) => volunteer.gate_id == null || gateIds.has(Number(volunteer.gate_id)));
+  }, [gates, volunteers]);
 
   const selectedVolunteer = useMemo(() => {
-    return volunteers.find((volunteer) => volunteer.gate_id === Number(gateId)) ?? volunteers[0];
-  }, [gateId, volunteers]);
+    return eventVolunteers.find((volunteer) => Number(volunteer.gate_id) === Number(gateId)) ?? eventVolunteers[0];
+  }, [gateId, eventVolunteers]);
 
   const validateTx = useCallback(
     async (rawTx) => {
@@ -187,9 +200,25 @@ export function ScannerPanel({ gates, volunteers, onScanComplete, onGateRefresh 
         <p className="muted-text">Tip: open the camera and point it at the ticket QR, or paste the copied TX.</p>
       )}
       <form className="scan-form" onSubmit={handleScan}>
+        <label className="full-width">
+          Event
+          <select
+            value={activeEventId}
+            onChange={(event) => onEventChange(Number(event.target.value))}
+            required
+          >
+            {events.length === 0 && <option value="">No events yet</option>}
+            {events.map((event) => (
+              <option key={event.id} value={event.id}>
+                {event.title} - {event.venue}
+              </option>
+            ))}
+          </select>
+        </label>
         <label>
           Gate
-          <select value={gateId} onChange={(event) => setGateId(Number(event.target.value))} required>
+          <select value={gateId} onChange={(event) => setGateId(Number(event.target.value))} required disabled={gates.length === 0}>
+            {gates.length === 0 && <option value="">No gates for this event</option>}
             {gates.map((gate) => (
               <option key={gate.id} value={gate.id}>
                 {gate.name}
@@ -201,6 +230,12 @@ export function ScannerPanel({ gates, volunteers, onScanComplete, onGateRefresh 
           Volunteer
           <input value={selectedVolunteer?.name ?? "No volunteer assigned"} readOnly />
         </label>
+        {gates.length === 0 && (
+          <p className="muted-text full-width">No gates added for this event yet. Ask an admin to add one before scanning.</p>
+        )}
+        {gates.length > 0 && !selectedVolunteer && (
+          <p className="error-text">No volunteer assigned to these gates yet. Ask an admin to add one before scanning.</p>
+        )}
         <label className="full-width">
           QR payload
           <textarea
@@ -212,7 +247,11 @@ export function ScannerPanel({ gates, volunteers, onScanComplete, onGateRefresh 
         </label>
         {info && <p className="muted-text">{info}</p>}
         {error && <p className="error-text">{error}</p>}
-        <button className="primary-button" type="submit" disabled={isValidating}>
+        <button
+          className="primary-button"
+          type="submit"
+          disabled={isValidating || !activeEventId || !gateId || !selectedVolunteer}
+        >
           <ScanLine size={18} aria-hidden="true" />
           {isValidating ? "Validating…" : "Validate ticket"}
         </button>

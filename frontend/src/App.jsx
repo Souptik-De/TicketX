@@ -276,6 +276,9 @@ function App() {
         <section className="workspace-grid">
           <div className="left-stack">
             <ScannerPanel
+              events={events}
+              selectedEventId={selectedEventId}
+              onEventChange={setSelectedEventId}
               gates={gateStatus}
               volunteers={volunteers}
               onScanComplete={setScanResult}
