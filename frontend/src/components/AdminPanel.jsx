@@ -225,16 +225,16 @@ export function AdminPanel({ events, gates, selectedEventId, onEventChange, onEv
                     })}
                   </span>
                 </span>
-                <span className="seat-total">
-                  <div className="seat-count">
+                <span className="seat-total" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.5rem' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
                     <b>{event.issued_count}</b>
                     <small>of {event.capacity} issued</small>
                   </div>
-                  <button
-                    type="button"
-                    className="delete-button"
-                    onClick={(e) => handleDeleteEvent(event.id, e)}
+                  <button 
+                    type="button" 
+                    onClick={(e) => handleDeleteEvent(event.id, e)} 
                     disabled={isDeletingEvent}
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'red', marginTop: '0.5rem' }}
                     title="Delete Event"
                   >
                     <Trash2 size={18} aria-hidden="true" />
