@@ -1188,6 +1188,38 @@ dd {
   font-size: 1.02rem;
 }
 
+.charts-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.chart-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  padding: 12px;
+  display: grid;
+  gap: 8px;
+  align-content: start;
+}
+
+.chart-card h4 {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--muted);
+  font-weight: 850;
+}
+
+.chart-box {
+  height: 240px;
+  width: 100%;
+}
+
+.chart-span {
+  grid-column: 1 / -1;
+}
+
 .stats-table-wrap {
   overflow-x: auto;
   border: 1px solid var(--line);
@@ -1464,6 +1496,7 @@ dd {
   .ticket-meta,
   .result-meta,
   .admin-metrics,
+  .charts-grid,
   .event-row,
   .gate-row {
     grid-template-columns: 1fr;

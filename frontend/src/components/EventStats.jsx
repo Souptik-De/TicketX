@@ -1,5 +1,18 @@
 import { useEffect, useMemo, useState } from "react";
 import { BarChart3, DoorOpen, Search, TicketCheck, UsersRound } from "lucide-react";
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  Legend,
+  Pie,
+  PieChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 
 import { getEventStats } from "../lib/api";
 
@@ -55,6 +68,39 @@ export function EventStats({ eventId }) {
     });
   }, [stats, search, filter]);
 
+  const tierChartData = useMemo(() => {
+    if (!stats) return [];
+    return stats.tier_breakdown.map((row) => ({
+      tier: row.tier.charAt(0).toUpperCase() + row.tier.slice(1),
+      Issued: row.issued,
+      Checked: row.checked_in,
+    }));
+  }, [stats]);
+
+  const gateChartData = useMemo(() => {
+    if (!stats) return [];
+    return stats.gate_breakdown.map((gate) => ({
+      name: gate.name,
+      Checked: gate.scanned_count,
+    }));
+  }, [stats]);
+
+  const statusPieData = useMemo(() => {
+    if (!stats) return [];
+    return [
+      { name: "Checked in", value: stats.checked_in },
+      { name: "Still outside", value: Math.max(stats.issued - stats.checked_in, 0) },
+    ];
+  }, [stats]);
+
+  const tooltipStyle = {
+    backgroundColor: "var(--surface-solid)",
+    border: "1px solid var(--line)",
+    borderRadius: "8px",
+    color: "var(--text)",
+    fontSize: "0.85rem",
+  };
+
   if (!eventId) {
     return null;
   }
@@ -96,6 +142,69 @@ export function EventStats({ eventId }) {
               <span>Still outside</span>
               <strong>{stats.issued - stats.checked_in}</strong>
             </div>
+          </div>
+
+          <div className="stats-section">
+            <h3>Charts</h3>
+            {stats.issued === 0 ? (
+              <p className="muted-text">Charts will appear once tickets are issued.</p>
+            ) : (
+              <div className="charts-grid">
+                <div className="chart-card">
+                  <h4>Check-in split</h4>
+                  <div className="chart-box">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Pie data={statusPieData} dataKey="value" nameKey="name" innerRadius={52} outerRadius={80} paddingAngle={3}>
+                          <Cell fill="var(--brand)" />
+                          <Cell fill="var(--line-strong)" />
+                        </Pie>
+                        <Tooltip contentStyle={tooltipStyle} />
+                        <Legend wrapperStyle={{ fontSize: "0.82rem" }} />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+                <div className="chart-card">
+                  <h4>Tickets by tier</h4>
+                  {tierChartData.length === 0 ? (
+                    <p className="muted-text">No tier data yet.</p>
+                  ) : (
+                    <div className="chart-box">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart data={tierChartData} margin={{ top: 4, right: 8, bottom: 0, left: -12 }}>
+                          <CartesianGrid stroke="var(--line)" strokeDasharray="3 3" vertical={false} />
+                          <XAxis dataKey="tier" tick={{ fill: "var(--muted)", fontSize: 12 }} axisLine={{ stroke: "var(--line)" }} tickLine={false} />
+                          <YAxis allowDecimals={false} tick={{ fill: "var(--muted)", fontSize: 12 }} axisLine={false} tickLine={false} />
+                          <Tooltip contentStyle={tooltipStyle} cursor={{ fill: "var(--surface-soft)" }} />
+                          <Legend wrapperStyle={{ fontSize: "0.82rem" }} />
+                          <Bar dataKey="Issued" fill="var(--line-strong)" radius={[6, 6, 0, 0]} />
+                          <Bar dataKey="Checked" fill="var(--brand)" radius={[6, 6, 0, 0]} />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  )}
+                </div>
+                <div className="chart-card chart-span">
+                  <h4>Check-ins by gate</h4>
+                  {gateChartData.length === 0 ? (
+                    <p className="muted-text">No gates added for this event yet.</p>
+                  ) : (
+                    <div className="chart-box">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart data={gateChartData} margin={{ top: 4, right: 8, bottom: 0, left: -12 }}>
+                          <CartesianGrid stroke="var(--line)" strokeDasharray="3 3" vertical={false} />
+                          <XAxis dataKey="name" tick={{ fill: "var(--muted)", fontSize: 12 }} axisLine={{ stroke: "var(--line)" }} tickLine={false} interval={0} />
+                          <YAxis allowDecimals={false} tick={{ fill: "var(--muted)", fontSize: 12 }} axisLine={false} tickLine={false} />
+                          <Tooltip contentStyle={tooltipStyle} cursor={{ fill: "var(--surface-soft)" }} />
+                          <Bar dataKey="Checked" fill="var(--brand)" radius={[6, 6, 0, 0]} />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="stats-section">
