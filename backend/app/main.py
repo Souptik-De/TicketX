@@ -11,6 +11,7 @@ from .models import Event, Gate, Scan, Ticket, User, Volunteer
 from .schemas import (
     EventCreate,
     EventOut,
+    EventStatsOut,
     GateCreate,
     GateOut,
     GateStatus,
@@ -26,7 +27,7 @@ from .schemas import (
     VolunteerOut,
 )
 from .seed import seed_reference_data
-from .services import create_gate, get_gate_status, issue_ticket, record_scan
+from .services import create_gate, get_event_stats, get_gate_status, issue_ticket, record_scan
 
 
 @asynccontextmanager
@@ -134,6 +135,15 @@ def delete_event(event_id: int, _: User = Depends(require_roles("admin")), db: S
     db.delete(event)
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@app.get("/events/{event_id}/stats", response_model=EventStatsOut)
+def event_stats(
+    event_id: int,
+    _: User = Depends(require_roles("admin")),
+    db: Session = Depends(get_db),
+) -> EventStatsOut:
+    return get_event_stats(db, event_id)
 
 
 @app.get("/volunteers", response_model=list[VolunteerOut])

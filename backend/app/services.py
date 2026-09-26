@@ -5,7 +5,18 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
 from .models import Attendee, Event, Gate, Scan, Ticket, Volunteer
-from .schemas import GateCreate, GateStatus, PriorScan, ScanCreate, ScanResult, TicketCreate
+from .schemas import (
+    EventStatsGate,
+    EventStatsOut,
+    EventStatsTicket,
+    EventStatsTier,
+    GateCreate,
+    GateStatus,
+    PriorScan,
+    ScanCreate,
+    ScanResult,
+    TicketCreate,
+)
 from .security import sign_ticket, ticket_id_from_signature
 
 
@@ -195,3 +206,102 @@ def get_gate_status(db: Session, event_id: int | None = None) -> list[GateStatus
         )
         for row in rows
     ]
+
+
+def get_event_stats(db: Session, event_id: int) -> EventStatsOut:
+    event = db.get(Event, event_id)
+    if event is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
+
+    tickets = (
+        db.query(Ticket)
+        .options(joinedload(Ticket.attendee))
+        .filter(Ticket.event_id == event_id)
+        .order_by(Ticket.id.asc())
+        .all()
+    )
+    ticket_ids = [ticket.id for ticket in tickets]
+
+    first_valid_scan: dict[int, Scan] = {}
+    if ticket_ids:
+        valid_scans = (
+            db.query(Scan)
+            .options(joinedload(Scan.gate), joinedload(Scan.volunteer))
+            .filter(Scan.ticket_id.in_(ticket_ids), Scan.result == "valid")
+            .order_by(Scan.timestamp.asc())
+            .all()
+        )
+        for scan in valid_scans:
+            if scan.ticket_id not in first_valid_scan:
+                first_valid_scan[scan.ticket_id] = scan
+
+    gates = db.query(Gate).filter(Gate.event_id == event_id).order_by(Gate.id.asc()).all()
+    gate_counts: dict[int, int] = {gate.id: 0 for gate in gates}
+    for scan in first_valid_scan.values():
+        if scan.gate_id in gate_counts:
+            gate_counts[scan.gate_id] += 1
+
+    tier_issued: dict[str, int] = {}
+    tier_checked: dict[str, int] = {}
+    ticket_rows: list[EventStatsTicket] = []
+    for ticket in tickets:
+        tier_key = (ticket.tier or "general").lower()
+        tier_issued[tier_key] = tier_issued.get(tier_key, 0) + 1
+
+        scan = first_valid_scan.get(ticket.id)
+        is_checked = scan is not None
+        if is_checked:
+            tier_checked[tier_key] = tier_checked.get(tier_key, 0) + 1
+
+        attendee = ticket.attendee
+        ticket_rows.append(
+            EventStatsTicket(
+                ticket_id=ticket.id,
+                attendee_name=attendee.name if attendee else "",
+                campus_id=attendee.campus_id if attendee else "",
+                contact_email=attendee.contact_email if attendee else "",
+                tier=ticket.tier,
+                seat_number=ticket.seat_number or "",
+                status=ticket.status,
+                issued_at=ticket.issued_at,
+                checked_in=is_checked,
+                check_gate_name=scan.gate.name if scan and scan.gate else None,
+                check_gate_location=scan.gate.location if scan and scan.gate else None,
+                checked_at=scan.timestamp if scan else None,
+                checked_by=scan.volunteer.name if scan and scan.volunteer else None,
+            )
+        )
+
+    issued = len(tickets)
+    checked_in = len(first_valid_scan)
+    remaining = max(event.capacity - issued, 0)
+    check_in_rate = round((checked_in / issued * 100) if issued else 0.0, 1)
+
+    tier_breakdown = [
+        EventStatsTier(tier=tier, issued=count, checked_in=tier_checked.get(tier, 0))
+        for tier, count in sorted(tier_issued.items())
+    ]
+    gate_breakdown = [
+        EventStatsGate(
+            gate_id=gate.id,
+            name=gate.name,
+            location=gate.location,
+            scanned_count=gate_counts.get(gate.id, 0),
+        )
+        for gate in gates
+    ]
+
+    return EventStatsOut(
+        event_id=event.id,
+        title=event.title,
+        venue=event.venue,
+        date_time=event.date_time,
+        capacity=event.capacity,
+        issued=issued,
+        checked_in=checked_in,
+        remaining=remaining,
+        check_in_rate=check_in_rate,
+        tier_breakdown=tier_breakdown,
+        gate_breakdown=gate_breakdown,
+        tickets=ticket_rows,
+    )

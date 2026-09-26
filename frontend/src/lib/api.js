@@ -102,3 +102,7 @@ export function getGateStatus(eventId) {
   const query = eventId ? `?event_id=${eventId}` : "";
   return request(`/gates/status${query}`);
 }
+
+export function getEventStats(eventId) {
+  return request(`/events/${eventId}/stats`);
+}

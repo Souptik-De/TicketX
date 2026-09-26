@@ -146,3 +146,47 @@ class VolunteerOut(BaseModel):
     id: int
     name: str
     gate_id: int | None
+
+
+class EventStatsTicket(BaseModel):
+    ticket_id: int
+    attendee_name: str
+    campus_id: str
+    contact_email: str
+    tier: str
+    seat_number: str
+    status: str
+    issued_at: datetime
+    checked_in: bool
+    check_gate_name: str | None = None
+    check_gate_location: str | None = None
+    checked_at: datetime | None = None
+    checked_by: str | None = None
+
+
+class EventStatsGate(BaseModel):
+    gate_id: int
+    name: str
+    location: str
+    scanned_count: int
+
+
+class EventStatsTier(BaseModel):
+    tier: str
+    issued: int
+    checked_in: int
+
+
+class EventStatsOut(BaseModel):
+    event_id: int
+    title: str
+    venue: str
+    date_time: datetime
+    capacity: int
+    issued: int
+    checked_in: int
+    remaining: int
+    check_in_rate: float
+    tier_breakdown: list[EventStatsTier]
+    gate_breakdown: list[EventStatsGate]
+    tickets: list[EventStatsTicket]

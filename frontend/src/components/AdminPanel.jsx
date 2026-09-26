@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Armchair, CalendarPlus, DoorOpen, MapPin, Plus, UsersRound, Trash2 } from "lucide-react";
 
 import { createEvent, createGate, deleteEvent } from "../lib/api";
+import { EventStats } from "./EventStats";
 
 export function AdminPanel({ events, gates, selectedEventId, onEventChange, onEventCreated, onGateCreated, onEventDeleted }) {
   const [title, setTitle] = useState("Freshers Night 2026");
@@ -262,6 +263,8 @@ export function AdminPanel({ events, gates, selectedEventId, onEventChange, onEv
             ))}
           </div>
         </div>
+
+        <EventStats eventId={selectedEvent?.id} />
       </div>
     </section>
   );

@@ -1150,6 +1150,131 @@ dd {
   gap: 6px;
 }
 
+.stats-section {
+  display: grid;
+  gap: 10px;
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.stats-section h3 {
+  margin: 0;
+  font-size: 1.02rem;
+}
+
+.stats-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-soft);
+}
+
+.stats-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.stats-table th,
+.stats-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+
+.stats-table thead th {
+  color: var(--muted);
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  background: var(--surface-solid);
+}
+
+.stats-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.stats-table td strong {
+  display: block;
+}
+
+.stats-sub {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.capitalize {
+  text-transform: capitalize;
+}
+
+.stats-toolbar {
+  display: grid;
+  gap: 10px;
+}
+
+.stats-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--line);
+  background: var(--surface-soft);
+  border-radius: 7px;
+  padding: 0 10px;
+}
+
+.stats-search input {
+  border: none;
+  background: transparent;
+  padding: 11px 0;
+}
+
+.stats-search input:focus {
+  box-shadow: none;
+}
+
+.stats-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.stats-filter {
+  min-height: 36px;
+  padding: 7px 12px;
+  font-size: 0.85rem;
+}
+
+.stats-filter.active {
+  border-color: var(--brand);
+  color: var(--brand);
+}
+
+.status-pill {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: 0.78rem;
+  font-weight: 900;
+  border: 1px solid var(--line);
+}
+
+.status-pill.in {
+  color: var(--success);
+  background: var(--success-soft);
+  border-color: color-mix(in srgb, var(--success) 40%, transparent);
+}
+
+.status-pill.out {
+  color: var(--warning);
+  background: var(--warning-soft);
+  border-color: color-mix(in srgb, var(--warning) 40%, transparent);
+}
+
 .empty-inline {
   display: inline-flex;
   align-items: center;
