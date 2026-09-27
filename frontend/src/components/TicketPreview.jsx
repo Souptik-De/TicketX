@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { Check, Copy, Download, TicketCheck } from "lucide-react";
+import { Check, Clock, Copy, Download, TicketCheck } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 
 import { normalizeTxPayload } from "../lib/ticketQr";
@@ -71,6 +71,27 @@ export function TicketPreview({ ticket }) {
         <TicketCheck aria-hidden="true" />
         <h2>No ticket issued yet</h2>
         <p>Register an attendee to generate a signed QR ticket for the gate.</p>
+      </section>
+    );
+  }
+
+  if (ticket.outcome === "waitlisted") {
+    return (
+      <section className="panel ticket-preview waitlist-state">
+        <div className="ticket-copy">
+          <p className="eyebrow">Waitlist Confirmed</p>
+          <h2>{ticket.event?.title || "Event Waitlist"}</h2>
+          {ticket.attendee?.name && <p>{ticket.attendee.name}</p>}
+        </div>
+        <div className="waitlist-card">
+          <Clock size={40} aria-hidden="true" />
+          <p className="waitlist-message">
+            This event is full. You've been added to the waitlist at position #{ticket.position}.
+          </p>
+          <p className="muted-text">
+            No QR code or seat is assigned while waitlisted. We'll notify you if a ticket becomes available.
+          </p>
+        </div>
       </section>
     );
   }

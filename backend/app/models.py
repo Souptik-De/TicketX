@@ -41,6 +41,7 @@ class Event(Base):
 
     tickets: Mapped[list["Ticket"]] = relationship(back_populates="event")
     gates: Mapped[list["Gate"]] = relationship(back_populates="event")
+    waitlist_entries: Mapped[list["WaitlistEntry"]] = relationship(back_populates="event")
 
     @property
     def issued_count(self) -> int:
@@ -71,6 +72,38 @@ class Ticket(Base):
     event: Mapped[Event] = relationship(back_populates="tickets")
     attendee: Mapped[Attendee] = relationship(back_populates="tickets")
     scans: Mapped[list["Scan"]] = relationship(back_populates="ticket")
+
+    @property
+    def outcome(self) -> str:
+        return "ticketed"
+
+
+class WaitlistEntry(Base):
+    __tablename__ = "waitlist_entries"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    event_id: Mapped[int] = mapped_column(ForeignKey("events.event_id"), nullable=False)
+    attendee_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    attendee_contact: Mapped[str] = mapped_column(String(160), nullable=False)
+    campus_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    tier: Mapped[str] = mapped_column(String(40), default="general", nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="waiting", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=lambda: datetime.now(UTC).replace(tzinfo=None),
+        nullable=False,
+    )
+
+    event: Mapped[Event] = relationship(back_populates="waitlist_entries")
+
+    @property
+    def outcome(self) -> str:
+        return "waitlisted"
+
+    @property
+    def waitlisted(self) -> bool:
+        return True
 
 
 class Gate(Base):

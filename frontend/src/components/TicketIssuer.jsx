@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Armchair, CalendarDays, Send } from "lucide-react";
+import { Armchair, CalendarDays, Clock, Send } from "lucide-react";
 
 import { getTicket, issueTicket } from "../lib/api";
 
@@ -11,6 +11,7 @@ export function TicketIssuer({ events, initialEventId, onTicketIssued }) {
   const [eventId, setEventId] = useState(initialEventId || "");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState("");
+  const [waitlistMessage, setWaitlistMessage] = useState("");
 
   const selectedEvent = events.find((event) => event.id === Number(eventId)) ?? events[0];
   const remainingSeats = selectedEvent ? selectedEvent.capacity - selectedEvent.issued_count : 0;
@@ -29,17 +30,33 @@ export function TicketIssuer({ events, initialEventId, onTicketIssued }) {
     }
 
     setError("");
+    setWaitlistMessage("");
     setIsSubmitting(true);
     try {
-      const created = await issueTicket({
+      const response = await issueTicket({
         event_id: selectedEvent.id,
         attendee_name: name,
         attendee_contact: email,
         campus_id: campusId,
         tier,
       });
-      const detail = await getTicket(created.ticket_id);
-      onTicketIssued(detail);
+
+      if (response.outcome === "waitlisted") {
+        const msg = `This event is full. You've been added to the waitlist at position #${response.position}.`;
+        setWaitlistMessage(msg);
+        onTicketIssued({
+          outcome: "waitlisted",
+          waitlisted: true,
+          position: response.position,
+          event_id: response.event_id,
+          event: selectedEvent,
+          attendee: { name, contact_email: email, campus_id: campusId },
+        });
+      } else {
+        setWaitlistMessage("");
+        const detail = await getTicket(response.ticket_id);
+        onTicketIssued(detail);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not issue ticket");
     } finally {
@@ -126,9 +143,21 @@ export function TicketIssuer({ events, initialEventId, onTicketIssued }) {
           </select>
         </label>
         {error && <p className="error-text">{error}</p>}
+        {waitlistMessage && (
+          <div className="waitlist-alert full-width" role="status">
+            <Clock size={18} aria-hidden="true" />
+            <span>{waitlistMessage}</span>
+          </div>
+        )}
         <button className="primary-button" disabled={isSubmitting} type="submit">
           <Send size={18} aria-hidden="true" />
-          {isSubmitting ? "Issuing..." : "Issue ticket"}
+          {isSubmitting
+            ? remainingSeats > 0
+              ? "Issuing..."
+              : "Joining waitlist..."
+            : remainingSeats > 0
+              ? "Issue ticket"
+              : "Join waitlist"}
         </button>
       </form>
     </section>

@@ -971,6 +971,53 @@ dd {
   grid-column: 1 / -1;
 }
 
+.waitlist-alert {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: 8px;
+  border: 1px solid var(--warning);
+  background: var(--warning-soft);
+  color: var(--text);
+  font-weight: 700;
+  font-size: 0.95rem;
+}
+
+.waitlist-alert svg {
+  color: var(--warning);
+  flex-shrink: 0;
+}
+
+.ticket-preview.waitlist-state {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.waitlist-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 12px;
+  padding: 32px 20px;
+  border-radius: 8px;
+  border: 1px dashed var(--warning);
+  background: var(--warning-soft);
+}
+
+.waitlist-card svg {
+  color: var(--warning);
+}
+
+.waitlist-message {
+  font-size: 1.15rem;
+  font-weight: 800;
+  color: var(--text);
+  margin: 0;
+}
+
 .scan-result {
   min-height: 190px;
   border-left: 8px solid var(--line-strong);

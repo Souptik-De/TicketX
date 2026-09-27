@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session, joinedload, subqueryload
 
 from .auth import create_token, hash_password, require_roles, verify_password
 from .database import SessionLocal, create_database, get_db
-from .models import Event, Gate, Scan, Ticket, User, Volunteer
+from .models import Event, Gate, Scan, Ticket, User, Volunteer, WaitlistEntry
 from .schemas import (
     EventCreate,
     EventOut,
@@ -24,6 +24,8 @@ from .schemas import (
     TicketCreate,
     TicketCreated,
     TicketDetail,
+    TicketIssuanceResponse,
+    WaitlistJoinResponse,
     RevokeTicketResponse,
     UserOut,
     VolunteerOut,
@@ -35,6 +37,7 @@ from .services import (
     get_gate_status,
     get_or_create_google_user,
     issue_ticket,
+    join_waitlist,
     record_scan,
     revoke_ticket,
 )
@@ -149,6 +152,9 @@ def delete_event(event_id: int, _: User = Depends(require_roles("admin")), db: S
     # Delete volunteers assigned to gates for this event
     db.query(Volunteer).filter(Volunteer.gate_id.in_(gate_ids)).delete(synchronize_session=False)
 
+    # Delete waitlist entries for this event
+    db.query(WaitlistEntry).filter(WaitlistEntry.event_id == event_id).delete(synchronize_session=False)
+
     # Delete gates for this event
     db.query(Gate).filter(Gate.event_id == event_id).delete(synchronize_session=False)
 
@@ -188,21 +194,33 @@ def add_gate(payload: GateCreate, _: User = Depends(require_roles("admin")), db:
     return create_gate(db, payload)
 
 
-@app.post("/tickets", response_model=TicketCreated, status_code=status.HTTP_201_CREATED)
+@app.post("/tickets", response_model=TicketCreated | WaitlistJoinResponse, status_code=status.HTTP_201_CREATED)
 def create_ticket(
     payload: TicketCreate,
     response: Response,
     _: User = Depends(require_roles("user")),
     db: Session = Depends(get_db),
-) -> TicketCreated:
-    ticket = issue_ticket(db, payload)
-    response.headers["Location"] = f"/tickets/{ticket.id}"
+) -> TicketCreated | WaitlistJoinResponse:
+    result = issue_ticket(db, payload)
+    if isinstance(result, WaitlistEntry):
+        return WaitlistJoinResponse(
+            outcome="waitlisted",
+            waitlisted=True,
+            position=result.position,
+            event_id=result.event_id,
+        )
+    if isinstance(result, WaitlistJoinResponse):
+        return result
+    response.headers["Location"] = f"/tickets/{result.id if hasattr(result, 'id') else result.ticket_id}"
+    if isinstance(result, TicketCreated):
+        return result
     return TicketCreated(
-        ticket_id=ticket.id,
-        qr_signature=ticket.qr_signature or "",
-        tier=ticket.tier,
-        seat_number=ticket.seat_number or "",
-        status=ticket.status,
+        outcome="ticketed",
+        ticket_id=result.id,
+        qr_signature=result.qr_signature or "",
+        tier=result.tier,
+        seat_number=result.seat_number or "",
+        status=result.status,
     )
 
 

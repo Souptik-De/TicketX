@@ -10,7 +10,7 @@ os.environ["DATABASE_URL"] = f"sqlite:///{TEST_DATABASE_PATH.as_posix()}"
 
 from backend.app.database import Base, SessionLocal, engine
 from backend.app.main import app
-from backend.app.models import Scan, Ticket, Volunteer
+from backend.app.models import Scan, Ticket, Volunteer, WaitlistEntry
 from backend.app.seed import seed_reference_data
 
 
@@ -262,14 +262,20 @@ def test_ticket_issuance_validations() -> None:
         headers=user_headers,
     )
     assert res_201.status_code == 201
+    assert res_201.json()["outcome"] == "ticketed"
 
-    # Second ticket for capacity=1 event -> 409 Conflict
-    res_409 = client.post(
+    # Second ticket for capacity=1 event -> joins waitlist
+    res_waitlist = client.post(
         "/tickets",
         json={"event_id": small_event["id"], "attendee_name": "User 2", "attendee_contact": "u2@example.com", "tier": "general"},
         headers=user_headers,
     )
-    assert res_409.status_code == 409
+    assert res_waitlist.status_code == 201
+    waitlist_data = res_waitlist.json()
+    assert waitlist_data["outcome"] == "waitlisted"
+    assert waitlist_data["waitlisted"] is True
+    assert waitlist_data["position"] == 1
+    assert waitlist_data["event_id"] == small_event["id"]
 
 
 def test_scan_endpoint_requires_scanner_role() -> None:
@@ -684,5 +690,102 @@ def test_revoke_ticket_and_scan_rejection() -> None:
     second_revoke = client.post(f"/tickets/{ticket_id}/revoke", headers=admin_headers)
     assert second_revoke.status_code == 409
     assert "already revoked" in second_revoke.json()["detail"].lower()
+
+
+def test_waitlist_join_when_event_at_capacity() -> None:
+    reset_database()
+    client = TestClient(app)
+    admin_headers = auth_headers(client, "admin", "admin123")
+    user_headers = auth_headers(client, "attendee", "attendee123")
+
+    # Given: an event at capacity (issue tickets until full)
+    event = client.post(
+        "/events",
+        json={
+            "title": "Sold Out Tech Talk",
+            "description": "Exclusive event with capacity of 1.",
+            "date_time": "2026-11-15T18:00:00",
+            "venue": "Main Auditorium",
+            "capacity": 1,
+        },
+        headers=admin_headers,
+    ).json()
+
+    initial_ticket = client.post(
+        "/tickets",
+        json={
+            "event_id": event["id"],
+            "attendee_name": "First Attendee",
+            "attendee_contact": "first@example.edu",
+            "tier": "general",
+        },
+        headers=user_headers,
+    )
+    assert initial_ticket.status_code == 201
+    assert initial_ticket.json()["outcome"] == "ticketed"
+
+    # When: one more attendee attempts to book
+    first_waitlist_attempt = client.post(
+        "/tickets",
+        json={
+            "event_id": event["id"],
+            "attendee_name": "Waitlisted Attendee 1",
+            "attendee_contact": "waitlist1@example.edu",
+            "campus_id": "CAMP-WAIT-01",
+            "tier": "general",
+        },
+        headers=user_headers,
+    )
+
+    # Then: assert the response has outcome="waitlisted" and position=1 (first person on this event's waitlist)
+    assert first_waitlist_attempt.status_code == 201
+    first_body = first_waitlist_attempt.json()
+    assert first_body["outcome"] == "waitlisted"
+    assert first_body["waitlisted"] is True
+    assert first_body["position"] == 1
+    assert first_body["event_id"] == event["id"]
+
+    # And: issue a second waitlisted attempt, assert position=2
+    second_waitlist_attempt = client.post(
+        "/tickets",
+        json={
+            "event_id": event["id"],
+            "attendee_name": "Waitlisted Attendee 2",
+            "attendee_contact": "waitlist2@example.edu",
+            "campus_id": "CAMP-WAIT-02",
+            "tier": "vip",
+        },
+        headers=user_headers,
+    )
+    assert second_waitlist_attempt.status_code == 201
+    second_body = second_waitlist_attempt.json()
+    assert second_body["outcome"] == "waitlisted"
+    assert second_body["waitlisted"] is True
+    assert second_body["position"] == 2
+    assert second_body["event_id"] == event["id"]
+
+    # Verify rows in database
+    with SessionLocal() as db:
+        entries = (
+            db.query(WaitlistEntry)
+            .filter(WaitlistEntry.event_id == event["id"])
+            .order_by(WaitlistEntry.position.asc())
+            .all()
+        )
+        assert len(entries) == 2
+        assert entries[0].position == 1
+        assert entries[0].attendee_name == "Waitlisted Attendee 1"
+        assert entries[0].attendee_contact == "waitlist1@example.edu"
+        assert entries[0].campus_id == "CAMP-WAIT-01"
+        assert entries[0].tier == "general"
+        assert entries[0].status == "waiting"
+
+        assert entries[1].position == 2
+        assert entries[1].attendee_name == "Waitlisted Attendee 2"
+        assert entries[1].attendee_contact == "waitlist2@example.edu"
+        assert entries[1].campus_id == "CAMP-WAIT-02"
+        assert entries[1].tier == "vip"
+        assert entries[1].status == "waiting"
+
 
 

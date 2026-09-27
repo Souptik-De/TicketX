@@ -19,8 +19,8 @@ export function OperationsSummary({ ticket, gates, event }) {
       </div>
       <div>
         <TicketCheck size={20} aria-hidden="true" />
-        <span>{ticket ? "Your allocated seat" : "Gate check-ins"}</span>
-        <strong>{ticket?.seat_number ?? checkedIn}</strong>
+        <span>{ticket?.seat_number ? "Your allocated seat" : ticket?.outcome === "waitlisted" ? "Waitlist position" : "Gate check-ins"}</span>
+        <strong>{ticket?.seat_number ?? (ticket?.outcome === "waitlisted" ? `#${ticket.position}` : checkedIn)}</strong>
       </div>
     </section>
   );

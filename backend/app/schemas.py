@@ -80,11 +80,26 @@ class TicketCreate(BaseModel):
 
 
 class TicketCreated(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    outcome: Literal["ticketed"] = "ticketed"
     ticket_id: int
     qr_signature: str
     tier: str
     seat_number: str
     status: str
+
+
+class WaitlistJoinResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    outcome: Literal["waitlisted"] = "waitlisted"
+    waitlisted: bool = True
+    position: int
+    event_id: int
+
+
+TicketIssuanceResponse = TicketCreated | WaitlistJoinResponse
 
 
 class TicketDetail(BaseModel):

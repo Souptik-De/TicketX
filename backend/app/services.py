@@ -4,7 +4,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
-from .models import Attendee, Event, Gate, Scan, Ticket, User, Volunteer
+from .models import Attendee, Event, Gate, Scan, Ticket, User, Volunteer, WaitlistEntry
 from .schemas import (
     EventStatsGate,
     EventStatsOut,
@@ -23,18 +23,53 @@ from .security import sign_ticket, ticket_id_from_signature
 TIER_PREFIXES = {"general": "GEN", "premium": "PRE", "vip": "VIP"}
 
 
-def issue_ticket(db: Session, payload: TicketCreate) -> Ticket:
+def join_waitlist(
+    db: Session,
+    event_id: int,
+    attendee_name: str,
+    attendee_contact: str,
+    campus_id: str | None,
+    tier: str,
+) -> WaitlistEntry:
+    position = (
+        db.query(WaitlistEntry)
+        .filter(WaitlistEntry.event_id == event_id, WaitlistEntry.status == "waiting")
+        .count()
+    ) + 1
+    entry = WaitlistEntry(
+        event_id=event_id,
+        attendee_name=attendee_name.strip(),
+        attendee_contact=str(attendee_contact).strip().lower(),
+        campus_id=campus_id.strip() if campus_id else None,
+        tier=tier.strip().lower(),
+        position=position,
+        status="waiting",
+    )
+    db.add(entry)
+    db.commit()
+    db.refresh(entry)
+    return entry
+
+
+def issue_ticket(db: Session, payload: TicketCreate) -> Ticket | WaitlistEntry:
     event = db.get(Event, payload.event_id)
     if event is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
 
-    issued_count = db.query(Ticket).filter(Ticket.event_id == event.id).count()
-    if issued_count >= event.capacity:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Event is at capacity")
-
     tier = payload.tier.strip().lower()
     if tier not in TIER_PREFIXES:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Choose General, Premium, or VIP seating")
+
+    issued_count = db.query(Ticket).filter(Ticket.event_id == event.id).count()
+    if issued_count >= event.capacity:
+        return join_waitlist(
+            db=db,
+            event_id=event.id,
+            attendee_name=payload.attendee_name,
+            attendee_contact=str(payload.attendee_contact),
+            campus_id=payload.campus_id,
+            tier=tier,
+        )
 
     tier_issued_count = db.query(Ticket).filter(Ticket.event_id == event.id, Ticket.tier == tier).count()
     seat_number = f"{TIER_PREFIXES[tier]}-{tier_issued_count + 1:03d}"
