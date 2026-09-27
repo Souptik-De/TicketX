@@ -1019,8 +1019,6 @@ def test_export_attendance_csv() -> None:
 
     # And: parse the returned CSV body (use Python's csv.reader on the response text) and assert:
     reader = list(csv.reader(io.StringIO(response.text)))
-    # - exactly 3 data rows (plus the header row)
-    assert len(reader) == 4
 
     header = reader[0]
     assert header == [
@@ -1034,7 +1032,13 @@ def test_export_attendance_csv() -> None:
         "Check-in Timestamp",
     ]
 
-    rows_by_name = {row[0]: row for row in reader[1:]}
+    # - locate the separator blank row dividing per-ticket rows and summary block
+    blank_index = next(i for i, row in enumerate(reader[1:], start=1) if not row or not any(row))
+    ticket_rows = reader[1:blank_index]
+    # - exactly 3 data rows
+    assert len(ticket_rows) == 3
+
+    rows_by_name = {row[0]: row for row in ticket_rows}
 
     # - the checked-in row has the correct Gate and a non-empty Check-in Timestamp
     alice_row = rows_by_name["Alice Scanned"]
@@ -1062,6 +1066,17 @@ def test_export_attendance_csv() -> None:
     assert charlie_row[5] == "Revoked"
     assert charlie_row[6] == ""
     assert charlie_row[7] == ""
+
+    # - parse the summary rows at the end of the same CSV
+    summary_rows = reader[blank_index + 1 :]
+    assert summary_rows[0][0] == "Summary"
+    summary_map = {row[0]: row[1] for row in summary_rows[1:] if len(row) >= 2}
+
+    assert summary_map["Total Tickets Issued"] == "2"
+    assert summary_map["Checked In"] == "1"
+    assert summary_map["No-Shows"] == "1"
+    assert summary_map["Revoked"] == "1"
+    assert summary_map["Check-in Rate"] == "50%"
 
 
 def test_export_attendance_role_protection() -> None:

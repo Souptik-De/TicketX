@@ -375,11 +375,12 @@ def get_event_stats(db: Session, event_id: int) -> EventStatsOut:
     ticket_rows: list[EventStatsTicket] = []
     for ticket in tickets:
         tier_key = (ticket.tier or "general").lower()
-        tier_issued[tier_key] = tier_issued.get(tier_key, 0) + 1
+        if ticket.status != "revoked":
+            tier_issued[tier_key] = tier_issued.get(tier_key, 0) + 1
 
         scan = first_valid_scan.get(ticket.id)
         is_checked = scan is not None
-        if is_checked:
+        if is_checked and ticket.status != "revoked":
             tier_checked[tier_key] = tier_checked.get(tier_key, 0) + 1
 
         attendee = ticket.attendee
@@ -401,8 +402,9 @@ def get_event_stats(db: Session, event_id: int) -> EventStatsOut:
             )
         )
 
-    issued = len(tickets)
-    checked_in = len(first_valid_scan)
+    active_tickets = [ticket for ticket in tickets if ticket.status != "revoked"]
+    issued = len(active_tickets)
+    checked_in = len([ticket for ticket in active_tickets if ticket.status == "used" or ticket.id in first_valid_scan])
     remaining = max(event.capacity - issued, 0)
     check_in_rate = round((checked_in / issued * 100) if issued else 0.0, 1)
 
@@ -505,6 +507,21 @@ def build_attendance_csv(db: Session, event_id: int) -> str:
             gate,
             check_in_timestamp,
         ])
+
+    total_issued = sum(1 for t in stats.tickets if t.status != "revoked")
+    checked_in = sum(1 for t in stats.tickets if t.status == "used")
+    no_shows = sum(1 for t in stats.tickets if t.status == "issued")
+    revoked = sum(1 for t in stats.tickets if t.status == "revoked")
+    rate_val = round((checked_in / total_issued * 100) if total_issued else 0.0, 1)
+    rate_str = f"{int(rate_val)}%" if rate_val.is_integer() else f"{rate_val}%"
+
+    writer.writerow([])
+    writer.writerow(["Summary", "", "", "", "", "", "", ""])
+    writer.writerow(["Total Tickets Issued", str(total_issued), "", "", "", "", "", ""])
+    writer.writerow(["Checked In", str(checked_in), "", "", "", "", "", ""])
+    writer.writerow(["No-Shows", str(no_shows), "", "", "", "", "", ""])
+    writer.writerow(["Revoked", str(revoked), "", "", "", "", "", ""])
+    writer.writerow(["Check-in Rate", rate_str, "", "", "", "", "", ""])
 
     return output.getvalue()
 

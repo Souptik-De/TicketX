@@ -151,6 +151,23 @@ export function EventStats({ eventId, onRevokeTicket }) {
     ];
   }, [stats]);
 
+  const attendanceSummary = useMemo(() => {
+    if (!stats) return null;
+    const tickets = stats.tickets || [];
+    const totalIssued = stats.issued;
+    const checkedIn = stats.checked_in;
+    const noShows = tickets.filter((t) => t.status === "issued").length;
+    const revoked = tickets.filter((t) => t.status === "revoked").length;
+    const checkInRate = stats.check_in_rate;
+    return {
+      totalIssued,
+      checkedIn,
+      noShows,
+      revoked,
+      checkInRate,
+    };
+  }, [stats]);
+
   const tooltipStyle = {
     backgroundColor: "var(--surface-solid)",
     border: "1px solid var(--line)",
@@ -171,7 +188,7 @@ export function EventStats({ eventId, onRevokeTicket }) {
           <h2>EventDetails</h2>
         </div>
         {stats && (
-          <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "6px" }}>
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "8px" }}>
             <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap", justifyContent: "flex-end" }}>
               <span className="sync-state">
                 {stats.checked_in} of {stats.issued} checked in ({stats.check_in_rate}%)
@@ -186,6 +203,48 @@ export function EventStats({ eventId, onRevokeTicket }) {
                 {isExporting ? "Exporting..." : "Export Attendance CSV"}
               </button>
             </div>
+            {attendanceSummary && (
+              <div
+                className="export-summary-row"
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "10px",
+                  flexWrap: "wrap",
+                  justifyContent: "flex-end",
+                  padding: "6px 12px",
+                  background: "var(--surface-soft)",
+                  border: "1px solid var(--line)",
+                  borderRadius: "8px",
+                  fontSize: "0.82rem",
+                }}
+              >
+                <span>
+                  <span style={{ color: "var(--muted)", fontWeight: 600 }}>Total Issued:</span>{" "}
+                  <strong>{attendanceSummary.totalIssued}</strong>
+                </span>
+                <span style={{ color: "var(--line)" }}>•</span>
+                <span>
+                  <span style={{ color: "var(--muted)", fontWeight: 600 }}>Checked In:</span>{" "}
+                  <strong>{attendanceSummary.checkedIn}</strong>
+                </span>
+                <span style={{ color: "var(--line)" }}>•</span>
+                <span>
+                  <span style={{ color: "var(--muted)", fontWeight: 600 }}>No-Shows:</span>{" "}
+                  <strong>{attendanceSummary.noShows}</strong>
+                </span>
+                <span style={{ color: "var(--line)" }}>•</span>
+                <span>
+                  <span style={{ color: "var(--muted)", fontWeight: 600 }}>Revoked:</span>{" "}
+                  <strong>{attendanceSummary.revoked}</strong>
+                </span>
+                <span style={{ color: "var(--line)" }}>•</span>
+                <span>
+                  <span style={{ color: "var(--muted)", fontWeight: 600 }}>Check-in Rate:</span>{" "}
+                  <strong>{attendanceSummary.checkInRate}%</strong>
+                </span>
+              </div>
+            )}
             {exportError && (
               <p className="error-text" style={{ margin: 0, fontSize: "0.85rem" }}>
                 {exportError}
