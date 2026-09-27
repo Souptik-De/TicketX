@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .database import Base
@@ -17,6 +17,8 @@ class User(Base):
     google_sub: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True, index=True)
     email: Mapped[str | None] = mapped_column(String(160), nullable=True, index=True)
 
+    waitlist_entries: Mapped[list["WaitlistEntry"]] = relationship(back_populates="user")
+
 
 class Attendee(Base):
     __tablename__ = "attendees"
@@ -27,6 +29,7 @@ class Attendee(Base):
     contact_email: Mapped[str] = mapped_column(String(160), nullable=False)
 
     tickets: Mapped[list["Ticket"]] = relationship(back_populates="attendee")
+    waitlist_entries: Mapped[list["WaitlistEntry"]] = relationship(back_populates="attendee")
 
 
 class Event(Base):
@@ -44,13 +47,22 @@ class Event(Base):
     waitlist_entries: Mapped[list["WaitlistEntry"]] = relationship(back_populates="event")
 
     @property
+    def active_tickets(self) -> list["Ticket"]:
+        """Tickets holding a seat. Revoked tickets have released theirs."""
+        return [ticket for ticket in self.tickets if ticket.status != "revoked"]
+
+    @property
     def issued_count(self) -> int:
-        return len(self.tickets)
+        return len(self.active_tickets)
+
+    @property
+    def revoked_count(self) -> int:
+        return len(self.tickets) - len(self.active_tickets)
 
     @property
     def tier_counts(self) -> list[dict[str, str | int]]:
         counts: dict[str, int] = {}
-        for ticket in self.tickets:
+        for ticket in self.active_tickets:
             counts[ticket.tier] = counts.get(ticket.tier, 0) + 1
         return [{"tier": tier, "issued_count": count} for tier, count in sorted(counts.items())]
 
@@ -80,22 +92,42 @@ class Ticket(Base):
 
 class WaitlistEntry(Base):
     __tablename__ = "waitlist_entries"
+    __table_args__ = (
+        # Every read path filters on the event, then orders by position among
+        # the still-waiting rows.
+        Index("ix_waitlist_event_status_position", "event_id", "status", "position"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     event_id: Mapped[int] = mapped_column(ForeignKey("events.event_id"), nullable=False)
+    # Links the queue to the real Attendee row, created on join rather than on
+    # issuance. Nullable only so pre-ET-07 rows survive the migration backfill.
+    attendee_id: Mapped[int | None] = mapped_column(ForeignKey("attendees.attendee_id"), nullable=True, index=True)
+    # Who submitted the request. Drives the "my registrations" lookup that
+    # powers the in-app promotion notice; it is not a dedupe key, because one
+    # user submits on behalf of many attendees.
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.user_id"), nullable=True, index=True)
+    # Set when ET-11 revocation promotes this entry, so the promoted attendee
+    # can reach their ticket without a name-based lookup.
+    promoted_ticket_id: Mapped[int | None] = mapped_column(ForeignKey("tickets.ticket_id"), nullable=True)
     attendee_name: Mapped[str] = mapped_column(String(120), nullable=False)
     attendee_contact: Mapped[str] = mapped_column(String(160), nullable=False)
     campus_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
     tier: Mapped[str] = mapped_column(String(40), default="general", nullable=False)
     position: Mapped[int] = mapped_column(Integer, nullable=False)
+    # status allowed values: "waiting", "promoted", "cancelled"
     status: Mapped[str] = mapped_column(String(20), default="waiting", nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
         default=lambda: datetime.now(UTC).replace(tzinfo=None),
         nullable=False,
     )
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, default=None)
 
     event: Mapped[Event] = relationship(back_populates="waitlist_entries")
+    attendee: Mapped["Attendee"] = relationship(back_populates="waitlist_entries")
+    user: Mapped["User"] = relationship(back_populates="waitlist_entries")
+    promoted_ticket: Mapped["Ticket"] = relationship()
 
     @property
     def outcome(self) -> str:

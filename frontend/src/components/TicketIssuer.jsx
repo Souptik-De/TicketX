@@ -14,7 +14,7 @@ export function TicketIssuer({ events, initialEventId, onTicketIssued }) {
   const [waitlistMessage, setWaitlistMessage] = useState("");
 
   const selectedEvent = events.find((event) => event.id === Number(eventId)) ?? events[0];
-  const remainingSeats = selectedEvent ? selectedEvent.capacity - selectedEvent.issued_count : 0;
+  const remainingSeats = selectedEvent ? Math.max(selectedEvent.capacity - selectedEvent.issued_count, 0) : 0;
 
   useEffect(() => {
     if (initialEventId) {
@@ -111,6 +111,9 @@ export function TicketIssuer({ events, initialEventId, onTicketIssued }) {
               <span><Armchair size={18} aria-hidden="true" /> {selectedEvent.issued_count} issued</span>
               <strong>{remainingSeats} remaining</strong>
             </div>
+            {selectedEvent.revoked_count > 0 && (
+              <p className="muted-text">{selectedEvent.revoked_count} revoked, seats released</p>
+            )}
             <div className="tier-counts">
               {["general", "premium", "vip"].map((tierName) => {
                 const count = selectedEvent.tier_counts?.find((item) => item.tier === tierName)?.issued_count ?? 0;

@@ -6,10 +6,12 @@ from pathlib import Path
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine, inspect, text
 
 TEST_DATABASE_PATH = Path(tempfile.gettempdir()) / f"ticketx-{uuid4().hex}.db"
 os.environ["DATABASE_URL"] = f"sqlite:///{TEST_DATABASE_PATH.as_posix()}"
 
+from backend.app import database as database_module
 from backend.app.database import Base, SessionLocal, engine
 from backend.app.main import app
 from backend.app.models import Scan, Ticket, Volunteer, WaitlistEntry
@@ -695,6 +697,52 @@ def test_revoke_ticket_and_scan_rejection() -> None:
     assert "already revoked" in second_revoke.json()["detail"].lower()
 
 
+def test_revoked_ticket_frees_capacity_in_event_listing() -> None:
+    reset_database()
+    client = TestClient(app)
+    admin_headers = auth_headers(client, "admin", "admin123")
+    user_headers = auth_headers(client, "attendee", "attendee123")
+
+    # Given: a small event holding exactly one ticket
+    event = client.post(
+        "/events",
+        json={
+            "title": "Capacity One",
+            "description": "",
+            "date_time": "2026-10-01T10:00:00",
+            "venue": "Hall A",
+            "capacity": 1,
+        },
+        headers=admin_headers,
+    ).json()
+    event_id = event["id"]
+    first = client.post(
+        "/tickets",
+        json={"event_id": event_id, "attendee_name": "Asha Roy", "attendee_contact": "asha@example.edu"},
+        headers=user_headers,
+    ).json()
+    assert first["outcome"] == "ticketed"
+
+    # When: the ticket is revoked
+    revoked = client.post(f"/tickets/{first['ticket_id']}/revoke", headers=admin_headers)
+    assert revoked.status_code == 200
+
+    # Then: the public listing reports the seat as free, not as issued
+    listing = client.get("/events").json()
+    listed = next(item for item in listing if item["id"] == event_id)
+    assert listed["issued_count"] == 0
+    assert listed["revoked_count"] == 1
+
+    # And: the freed seat is actually issuable rather than waitlisted
+    second = client.post(
+        "/tickets",
+        json={"event_id": event_id, "attendee_name": "Bo Das", "attendee_contact": "bo@example.edu"},
+        headers=user_headers,
+    ).json()
+    assert second["outcome"] == "ticketed"
+    assert second["seat_number"]
+
+
 def test_waitlist_join_when_event_at_capacity() -> None:
     reset_database()
     client = TestClient(app)
@@ -1109,3 +1157,332 @@ def test_export_attendance_nonexistent_event_404() -> None:
 
 
 
+
+def test_migration_backfills_waitlist_links_on_a_legacy_database() -> None:
+    """Production runs on a persistent SQLite volume, so migrate_existing_database()
+    is the real upgrade path. The rest of the suite only ever calls
+    drop_all/create_all, so nothing else covers it."""
+    legacy_path = Path(tempfile.gettempdir()) / f"ticketx-legacy-{uuid4().hex}.db"
+    legacy_url = f"sqlite:///{legacy_path.as_posix()}"
+    legacy_engine = create_engine(legacy_url, connect_args={"check_same_thread": False})
+
+    try:
+        # Given: a database from before ET-07, where waitlist_entries carries only
+        # denormalised attendee columns and no attendee_id / user_id links.
+        with legacy_engine.begin() as setup:
+            setup.execute(text("CREATE TABLE attendees (attendee_id INTEGER PRIMARY KEY, name VARCHAR(120) NOT NULL, campus_id VARCHAR(80) NOT NULL, contact_email VARCHAR(160) NOT NULL)"))
+            setup.execute(text("CREATE TABLE users (user_id INTEGER PRIMARY KEY, username VARCHAR(80) NOT NULL, password_hash VARCHAR(160), role VARCHAR(24) NOT NULL, display_name VARCHAR(120) NOT NULL)"))
+            setup.execute(text("CREATE TABLE events (event_id INTEGER PRIMARY KEY, title VARCHAR(160) NOT NULL, description VARCHAR(600) NOT NULL, date_time DATETIME NOT NULL, venue VARCHAR(160) NOT NULL, capacity INTEGER NOT NULL)"))
+            setup.execute(text("CREATE TABLE tickets (ticket_id INTEGER PRIMARY KEY, qr_signature VARCHAR(180), tier VARCHAR(40) NOT NULL, seat_number VARCHAR(24), status VARCHAR(20) NOT NULL, issued_at DATETIME NOT NULL, revoked_at DATETIME, event_id INTEGER NOT NULL, attendee_id INTEGER NOT NULL)"))
+            setup.execute(
+                text(
+                    "CREATE TABLE waitlist_entries (id INTEGER PRIMARY KEY, event_id INTEGER NOT NULL, "
+                    "attendee_name VARCHAR(120) NOT NULL, attendee_contact VARCHAR(160) NOT NULL, "
+                    "campus_id VARCHAR(80), tier VARCHAR(40) NOT NULL, position INTEGER NOT NULL, "
+                    "status VARCHAR(20) NOT NULL, created_at DATETIME NOT NULL)"
+                )
+            )
+            setup.execute(text("INSERT INTO events (event_id, title, description, date_time, venue, capacity) VALUES (1, 'Legacy Fest', '', '2026-10-01T10:00:00', 'Hall A', 1)"))
+            setup.execute(text("INSERT INTO users (user_id, username, password_hash, role, display_name) VALUES (1, 'attendee', 'x', 'user', 'Attendee')"))
+            # One entry matching an existing Attendee, one needing a new Attendee row,
+            # and one promoted row that must keep its place in history.
+            setup.execute(text("INSERT INTO attendees (attendee_id, name, campus_id, contact_email) VALUES (1, 'Riya Sen', 'CAMP-1', 'riya@example.edu')"))
+            setup.execute(
+                text(
+                    "INSERT INTO waitlist_entries (id, event_id, attendee_name, attendee_contact, campus_id, tier, position, status, created_at) "
+                    "VALUES (1, 1, 'Riya Sen', 'riya@example.edu', 'CAMP-1', 'general', 1, 'waiting', '2026-09-01 10:00:00')"
+                )
+            )
+            setup.execute(
+                text(
+                    "INSERT INTO waitlist_entries (id, event_id, attendee_name, attendee_contact, campus_id, tier, position, status, created_at) "
+                    "VALUES (2, 1, 'Newcomer', 'newcomer@example.edu', NULL, 'premium', 2, 'waiting', '2026-09-01 11:00:00')"
+                )
+            )
+            setup.execute(
+                text(
+                    "INSERT INTO waitlist_entries (id, event_id, attendee_name, attendee_contact, campus_id, tier, position, status, created_at) "
+                    "VALUES (3, 1, 'Old Winner', 'old@example.edu', 'CAMP-OLD', 'general', 1, 'promoted', '2026-08-01 09:00:00')"
+                )
+            )
+
+        # When: the migration runs
+        with legacy_engine.begin() as setup:
+            setup.execute(text("DROP INDEX IF EXISTS ix_waitlist_event_status_position"))
+        original_database_url = database_module.DATABASE_URL
+        original_engine = database_module.engine
+        database_module.DATABASE_URL = legacy_url
+        database_module.engine = legacy_engine
+        try:
+            database_module.migrate_existing_database()
+        finally:
+            database_module.DATABASE_URL = original_database_url
+            database_module.engine = original_engine
+
+        # Then: the new columns exist and pre-existing rows are preserved
+        inspector = inspect(legacy_engine)
+        columns = {column["name"] for column in inspector.get_columns("waitlist_entries")}
+        assert {"attendee_id", "user_id", "promoted_ticket_id", "resolved_at"} <= columns
+        assert {index["name"] for index in inspector.get_indexes("waitlist_entries")} >= {
+            "ix_waitlist_event_status_position",
+            "ix_waitlist_entries_attendee_id",
+            "ix_waitlist_entries_user_id",
+        }
+
+        with legacy_engine.begin() as connection:
+            rows = connection.execute(
+                text("SELECT id, attendee_id, attendee_contact, position, status FROM waitlist_entries ORDER BY id")
+            ).mappings().all()
+            assert [row["id"] for row in rows] == [1, 2, 3]
+            assert [row["position"] for row in rows] == [1, 2, 1]
+            assert rows[2]["status"] == "promoted"
+
+            # The pre-existing attendee is reused, not duplicated.
+            assert rows[0]["attendee_id"] == 1
+            # A campus-less entry is matched on its lowercased contact.
+            assert rows[1]["attendee_id"] is not None
+            # And a new Attendee row was created to back that link.
+            new_attendee = connection.execute(
+                text("SELECT campus_id, contact_email FROM attendees WHERE attendee_id = :aid"),
+                {"aid": rows[1]["attendee_id"]},
+            ).mappings().one()
+            assert new_attendee["campus_id"] == "newcomer@example.edu"
+            assert new_attendee["contact_email"] == "newcomer@example.edu"
+            # No duplicate Attendee was created for the already-known campus id.
+            assert connection.execute(
+                text("SELECT COUNT(*) FROM attendees WHERE campus_id = 'CAMP-1'")
+            ).scalar() == 1
+
+        # And: re-running the migration is a no-op rather than duplicating rows
+        database_module.DATABASE_URL = legacy_url
+        database_module.engine = legacy_engine
+        try:
+            database_module.migrate_existing_database()
+        finally:
+            database_module.DATABASE_URL = original_database_url
+            database_module.engine = original_engine
+        with legacy_engine.begin() as connection:
+            # Three identities: CAMP-1 pre-existing, the campus-less contact, and CAMP-OLD.
+            assert connection.execute(text("SELECT COUNT(*) FROM attendees")).scalar() == 3
+            assert connection.execute(text("SELECT COUNT(*) FROM waitlist_entries")).scalar() == 3
+            # Every entry ended up linked, including the already-promoted one.
+            assert connection.execute(
+                text("SELECT COUNT(*) FROM waitlist_entries WHERE attendee_id IS NULL")
+            ).scalar() == 0
+    finally:
+        legacy_engine.dispose()
+        legacy_path.unlink(missing_ok=True)
+
+def _capacity_one_event(client: TestClient, admin_headers: dict[str, str], title: str) -> int:
+    return client.post(
+        "/events",
+        json={
+            "title": title,
+            "description": "",
+            "date_time": "2026-11-20T18:00:00",
+            "venue": "Main Auditorium",
+            "capacity": 1,
+        },
+        headers=admin_headers,
+    ).json()["id"]
+
+
+def test_repeat_waitlist_join_is_idempotent() -> None:
+    reset_database()
+    client = TestClient(app)
+    admin_headers = auth_headers(client, "admin", "admin123")
+    user_headers = auth_headers(client, "attendee", "attendee123")
+    event_id = _capacity_one_event(client, admin_headers, "Idempotent Waitlist")
+
+    client.post(
+        "/tickets",
+        json={"event_id": event_id, "attendee_name": "Seat Holder", "attendee_contact": "holder@example.edu"},
+        headers=user_headers,
+    )
+
+    payload = {
+        "event_id": event_id,
+        "attendee_name": "Impatient Attendee",
+        "attendee_contact": "impatient@example.edu",
+        "campus_id": "CAMP-IDEM",
+        "tier": "general",
+    }
+    first = client.post("/tickets", json=payload, headers=user_headers).json()
+    # A retry of the same submission must not hand out a second queue place.
+    second = client.post("/tickets", json=payload, headers=user_headers).json()
+    third = client.post("/tickets", json=payload, headers=user_headers).json()
+
+    assert first["position"] == 1
+    assert second["position"] == 1
+    assert third["position"] == 1
+    assert first["waitlist_entry_id"] == second["waitlist_entry_id"] == third["waitlist_entry_id"]
+
+    with SessionLocal() as db:
+        entries = db.query(WaitlistEntry).filter(WaitlistEntry.event_id == event_id).all()
+        assert len(entries) == 1
+        assert entries[0].attendee_id is not None
+        assert entries[0].user_id is not None
+
+
+def test_promoted_attendee_recovers_their_ticket_from_me_registrations() -> None:
+    """ET-07 acceptance: a seat opening up is automatically issued to the next
+    waitlisted attendee, and that attendee can actually collect it."""
+    reset_database()
+    client = TestClient(app)
+    admin_headers = auth_headers(client, "admin", "admin123")
+    user_headers = auth_headers(client, "attendee", "attendee123")
+    event_id = _capacity_one_event(client, admin_headers, "Promotion Notice")
+
+    holder = client.post(
+        "/tickets",
+        json={"event_id": event_id, "attendee_name": "Seat Holder", "attendee_contact": "holder@example.edu"},
+        headers=user_headers,
+    ).json()
+    assert holder["outcome"] == "ticketed"
+
+    client.post(
+        "/tickets",
+        json={
+            "event_id": event_id,
+            "attendee_name": "Waiting Person",
+            "attendee_contact": "waiting@example.edu",
+            "campus_id": "CAMP-WAIT",
+            "tier": "premium",
+        },
+        headers=user_headers,
+    )
+
+    # Before any revocation the attendee sees a live position.
+    before = client.get("/me/registrations", headers=user_headers)
+    assert before.status_code == 200
+    entry = before.json()["waitlist"][0]
+    assert entry["status"] == "waiting"
+    assert entry["position"] == 1
+    assert entry["event_title"] == "Promotion Notice"
+    assert entry["promoted_ticket"] is None
+
+    # When: ET-11 revokes the seat
+    revoked = client.post(f"/tickets/{holder['ticket_id']}/revoke", headers=admin_headers)
+    assert revoked.status_code == 200
+    assert revoked.json()["promoted_attendee"]["attendee_name"] == "Waiting Person"
+
+    # Then: the same caller's registrations now carry the issued ticket, QR and all
+    after = client.get("/me/registrations", headers=user_headers).json()["waitlist"][0]
+    assert after["status"] == "promoted"
+    assert after["position"] is None
+    assert after["promoted_ticket"] is not None
+    ticket = after["promoted_ticket"]
+    assert ticket["status"] == "issued"
+    assert ticket["tier"] == "premium"
+    assert ticket["qr_signature"].startswith("TX-")
+    assert ticket["seat_number"]
+    # The signature is real, so the promoted ticket actually scans.
+    assert ticket_id_from_signature(ticket["qr_signature"]) == ticket["ticket_id"]
+    assert ticket["event"]["id"] == event_id
+
+    # And: a reload of the ticket endpoint agrees
+    reloaded = client.get(f"/tickets/{ticket['ticket_id']}", headers=user_headers)
+    assert reloaded.status_code == 200
+    assert reloaded.json()["qr_signature"] == ticket["qr_signature"]
+
+
+def test_leaving_the_waitlist_compacts_positions() -> None:
+    reset_database()
+    client = TestClient(app)
+    admin_headers = auth_headers(client, "admin", "admin123")
+    user_headers = auth_headers(client, "attendee", "attendee123")
+    event_id = _capacity_one_event(client, admin_headers, "Withdrawal")
+
+    client.post(
+        "/tickets",
+        json={"event_id": event_id, "attendee_name": "Seat Holder", "attendee_contact": "holder@example.edu"},
+        headers=user_headers,
+    )
+    first = client.post(
+        "/tickets",
+        json={
+            "event_id": event_id,
+            "attendee_name": "Leaving Early",
+            "attendee_contact": "leaving@example.edu",
+            "campus_id": "CAMP-LEAVE",
+        },
+        headers=user_headers,
+    ).json()
+    client.post(
+        "/tickets",
+        json={
+            "event_id": event_id,
+            "attendee_name": "Stays Waiting",
+            "attendee_contact": "stays@example.edu",
+            "campus_id": "CAMP-STAY",
+        },
+        headers=user_headers,
+    )
+
+    assert first["position"] == 1
+    second_entry = client.get("/me/registrations", headers=user_headers).json()["waitlist"]
+    assert [row["position"] for row in second_entry] == [2, 1]
+
+    # When: the person at #1 withdraws
+    withdrawn = client.delete(f"/me/waitlist/{first['waitlist_entry_id']}", headers=user_headers)
+    assert withdrawn.status_code == 204
+
+    # Then: the remaining entry slides up to #1 and is marked cancelled, not deleted
+    rows = client.get("/me/registrations", headers=user_headers).json()["waitlist"]
+    withdrawn_row = next(row for row in rows if row["waitlist_entry_id"] == first["waitlist_entry_id"])
+    assert withdrawn_row["status"] == "cancelled"
+    assert withdrawn_row["position"] is None
+    still_waiting = next(row for row in rows if row["attendee_name"] == "Stays Waiting")
+    assert still_waiting["status"] == "waiting"
+    assert still_waiting["position"] == 1
+
+    with SessionLocal() as db:
+        entries = db.query(WaitlistEntry).filter(WaitlistEntry.event_id == event_id).all()
+        assert {entry.status for entry in entries} == {"cancelled", "waiting"}
+
+
+def test_withdraw_cannot_touch_another_users_entry() -> None:
+    reset_database()
+    client = TestClient(app)
+    admin_headers = auth_headers(client, "admin", "admin123")
+    user_headers = auth_headers(client, "attendee", "attendee123")
+    event_id = _capacity_one_event(client, admin_headers, "Ownership")
+
+    client.post(
+        "/tickets",
+        json={"event_id": event_id, "attendee_name": "Seat Holder", "attendee_contact": "holder@example.edu"},
+        headers=user_headers,
+    )
+    entry = client.post(
+        "/tickets",
+        json={
+            "event_id": event_id,
+            "attendee_name": "Mine",
+            "attendee_contact": "mine@example.edu",
+            "campus_id": "CAMP-MINE",
+        },
+        headers=user_headers,
+    ).json()
+
+    # A scanner has no queue places to withdraw, so the role guard answers first.
+    scanner_headers = auth_headers(client, "scanner", "scanner123")
+    assert client.delete(f"/me/waitlist/{entry['waitlist_entry_id']}", headers=scanner_headers).status_code == 403
+    # An entry that does not exist is a 404, and does not leak whether it would.
+    assert client.delete("/me/waitlist/999999", headers=user_headers).status_code == 404
+
+    # Still the owner's to withdraw.
+    assert client.delete(f"/me/waitlist/{entry['waitlist_entry_id']}", headers=user_headers).status_code == 204
+    # And withdrawing again is a conflict rather than a silent success.
+    assert client.delete(f"/me/waitlist/{entry['waitlist_entry_id']}", headers=user_headers).status_code == 409
+
+    with SessionLocal() as db:
+        row = db.get(WaitlistEntry, entry["waitlist_entry_id"])
+        assert row is not None
+        assert row.status == "cancelled"
+
+
+def test_me_registrations_requires_a_token() -> None:
+    reset_database()
+    client = TestClient(app)
+
+    assert client.get("/me/registrations").status_code == 401
