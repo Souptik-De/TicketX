@@ -1019,6 +1019,57 @@ dd {
   margin: 0;
 }
 
+.ticket-preview .ticket-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  grid-column: 1 / -1;
+}
+
+.ticket-preview .ticket-actions .ghost-button {
+  grid-column: auto;
+  flex: 1 1 140px;
+}
+
+.gate-summary {
+  display: grid;
+  gap: 8px;
+  grid-column: 1 / -1;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  background: var(--surface-soft);
+}
+
+.gate-summary-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 0;
+}
+
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  .ticket-print-area,
+  .ticket-print-area * {
+    visibility: visible;
+  }
+  .ticket-print-area {
+    position: absolute;
+    inset: 0 auto auto 0;
+    width: 100%;
+    box-shadow: none;
+  }
+  .ticket-print-area .tx-copy-row button,
+  .ticket-print-area .gate-summary button,
+  .ticket-print-area .ticket-actions {
+    display: none;
+  }
+}
+
 .scan-result {
   min-height: 190px;
   border-left: 8px solid var(--line-strong);
