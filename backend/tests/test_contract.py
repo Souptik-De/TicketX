@@ -11,6 +11,7 @@ os.environ["DATABASE_URL"] = f"sqlite:///{TEST_DATABASE_PATH.as_posix()}"
 from backend.app.database import Base, SessionLocal, engine
 from backend.app.main import app
 from backend.app.models import Scan, Ticket, Volunteer, WaitlistEntry
+from backend.app.security import ticket_id_from_signature
 from backend.app.seed import seed_reference_data
 
 
@@ -786,6 +787,158 @@ def test_waitlist_join_when_event_at_capacity() -> None:
         assert entries[1].campus_id == "CAMP-WAIT-02"
         assert entries[1].tier == "vip"
         assert entries[1].status == "waiting"
+
+
+def test_waitlist_auto_promotion_on_revoke() -> None:
+    reset_database()
+    client = TestClient(app)
+    admin_headers = auth_headers(client, "admin", "admin123")
+    user_headers = auth_headers(client, "attendee", "attendee123")
+
+    # Given: an event at capacity with two waitlisted attendees (positions 1 and 2)
+    event = client.post(
+        "/events",
+        json={
+            "title": "Capacity One Keynote",
+            "description": "Event with capacity of 1 for testing auto-promotion.",
+            "date_time": "2026-11-20T10:00:00",
+            "venue": "Main Auditorium",
+            "capacity": 1,
+        },
+        headers=admin_headers,
+    ).json()
+    event_id = event["id"]
+
+    initial_ticket_res = client.post(
+        "/tickets",
+        json={
+            "event_id": event_id,
+            "attendee_name": "Original Holder",
+            "attendee_contact": "original@example.edu",
+            "campus_id": "CAMP-ORIG-01",
+            "tier": "general",
+        },
+        headers=user_headers,
+    )
+    assert initial_ticket_res.status_code == 201
+    assert initial_ticket_res.json()["outcome"] == "ticketed"
+    revoked_ticket_id = initial_ticket_res.json()["ticket_id"]
+
+    # First waitlisted attendee (position 1) requesting VIP tier
+    first_waitlist_res = client.post(
+        "/tickets",
+        json={
+            "event_id": event_id,
+            "attendee_name": "Waitlisted Attendee 1",
+            "attendee_contact": "waitlist1@example.edu",
+            "campus_id": "CAMP-WAIT-01",
+            "tier": "vip",
+        },
+        headers=user_headers,
+    )
+    assert first_waitlist_res.status_code == 201
+    assert first_waitlist_res.json()["outcome"] == "waitlisted"
+    assert first_waitlist_res.json()["position"] == 1
+
+    # Second waitlisted attendee (position 2) requesting General tier
+    second_waitlist_res = client.post(
+        "/tickets",
+        json={
+            "event_id": event_id,
+            "attendee_name": "Waitlisted Attendee 2",
+            "attendee_contact": "waitlist2@example.edu",
+            "campus_id": "CAMP-WAIT-02",
+            "tier": "general",
+        },
+        headers=user_headers,
+    )
+    assert second_waitlist_res.status_code == 201
+    assert second_waitlist_res.json()["outcome"] == "waitlisted"
+    assert second_waitlist_res.json()["position"] == 2
+
+    # When: an admin revokes one issued ticket for that event
+    revoke_res = client.post(f"/tickets/{revoked_ticket_id}/revoke", headers=admin_headers)
+    assert revoke_res.status_code == 200
+    revoke_data = revoke_res.json()
+
+    # Then: assert the revoke response's promoted_attendee is not null and matches the FIRST waitlisted attendee (position 1)
+    assert revoke_data["status"] == "revoked"
+    assert revoke_data["ticket_id"] == revoked_ticket_id
+    assert revoke_data["promoted_attendee"] is not None
+    promoted = revoke_data["promoted_attendee"]
+    assert promoted["attendee_name"] == "Waitlisted Attendee 1"
+    assert promoted["tier"] == "vip"
+    new_ticket_id = promoted["new_ticket_id"]
+    assert new_ticket_id is not None
+    assert new_ticket_id != revoked_ticket_id
+
+    # And: assert a new Ticket row now exists for that attendee, with a valid HMAC signature
+    with SessionLocal() as db:
+        new_ticket = db.get(Ticket, new_ticket_id)
+        assert new_ticket is not None
+        assert new_ticket.event_id == event_id
+        assert new_ticket.tier == "vip"
+        assert new_ticket.status == "issued"
+        assert new_ticket.attendee.name == "Waitlisted Attendee 1"
+        assert new_ticket.qr_signature is not None
+        assert new_ticket.qr_signature.startswith(f"TX-{new_ticket.id}.")
+        assert ticket_id_from_signature(new_ticket.qr_signature) == new_ticket.id
+
+        # And: assert that attendee's WaitlistEntry.status is now "promoted"
+        entry_1 = (
+            db.query(WaitlistEntry)
+            .filter(WaitlistEntry.event_id == event_id, WaitlistEntry.attendee_name == "Waitlisted Attendee 1")
+            .one()
+        )
+        assert entry_1.status == "promoted"
+
+        # And: assert the previously-second waitlisted attendee's position is now 1, not 2
+        entry_2 = (
+            db.query(WaitlistEntry)
+            .filter(WaitlistEntry.event_id == event_id, WaitlistEntry.attendee_name == "Waitlisted Attendee 2")
+            .one()
+        )
+        assert entry_2.status == "waiting"
+        assert entry_2.position == 1
+
+
+def test_revoke_ticket_with_empty_waitlist_noop() -> None:
+    reset_database()
+    client = TestClient(app)
+    admin_headers = auth_headers(client, "admin", "admin123")
+    user_headers = auth_headers(client, "attendee", "attendee123")
+    scanner_headers = auth_headers(client, "scanner", "scanner123")
+
+    # Given: a ticket for an event with an EMPTY waitlist
+    ticket = issue_demo_ticket(client, user_headers)
+    ticket_id = ticket["ticket_id"]
+
+    # When: an admin revokes it
+    revoke_response = client.post(f"/tickets/{ticket_id}/revoke", headers=admin_headers)
+    assert revoke_response.status_code == 200
+    revoke_data = revoke_response.json()
+
+    # Then: assert promoted_attendee is null and behavior is otherwise identical to the Commit 1 test
+    assert revoke_data["ticket_id"] == ticket_id
+    assert revoke_data["status"] == "revoked"
+    assert revoke_data["revoked_at"] is not None
+    assert revoke_data.get("promoted_attendee") is None
+
+    # scan rejection still works
+    scan_response = client.post(
+        "/scans",
+        json={"qr_signature": ticket["qr_signature"], "gate_id": 1, "volunteer_id": 1},
+        headers=scanner_headers,
+    )
+    assert scan_response.status_code == 200
+    scan_data = scan_response.json()
+    assert scan_data["result"] == "invalid"
+    assert "revoked" in scan_data["message"].lower()
+
+    # Second revoke attempt still returns 409
+    second_revoke = client.post(f"/tickets/{ticket_id}/revoke", headers=admin_headers)
+    assert second_revoke.status_code == 409
+    assert "already revoked" in second_revoke.json()["detail"].lower()
 
 
 

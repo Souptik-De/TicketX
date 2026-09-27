@@ -29,6 +29,7 @@ from .schemas import (
     RevokeTicketResponse,
     UserOut,
     VolunteerOut,
+    WaitlistEntryOut,
 )
 from .seed import seed_reference_data
 from .services import (
@@ -261,6 +262,21 @@ def revoke_ticket_endpoint(
         ticket_id=ticket.id,
         status=ticket.status,
         revoked_at=ticket.revoked_at,
+        promoted_attendee=getattr(ticket, "promoted_attendee", None),
+    )
+
+
+@app.get("/events/{event_id}/waitlist", response_model=list[WaitlistEntryOut])
+def list_event_waitlist(
+    event_id: int,
+    _: User = Depends(require_roles("admin")),
+    db: Session = Depends(get_db),
+) -> list[WaitlistEntry]:
+    return (
+        db.query(WaitlistEntry)
+        .filter(WaitlistEntry.event_id == event_id, WaitlistEntry.status == "waiting")
+        .order_by(WaitlistEntry.position.asc())
+        .all()
     )
 
 

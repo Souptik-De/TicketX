@@ -112,12 +112,22 @@ class TicketDetail(BaseModel):
     attendee: AttendeeOut
 
 
+class PromotedAttendeeInfo(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    attendee_name: str
+    new_ticket_id: int
+    tier: str
+
+
 class RevokeTicketResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     ticket_id: int
     status: str
     revoked_at: datetime | None = None
+    promoted_attendee: PromotedAttendeeInfo | None = None
+
 
 
 
@@ -206,6 +216,20 @@ class EventStatsTier(BaseModel):
     checked_in: int
 
 
+class WaitlistEntryOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    event_id: int
+    attendee_name: str
+    attendee_contact: str
+    campus_id: str | None = None
+    tier: str
+    position: int
+    status: str
+    created_at: datetime | None = None
+
+
 class EventStatsOut(BaseModel):
     event_id: int
     title: str
@@ -219,3 +243,5 @@ class EventStatsOut(BaseModel):
     tier_breakdown: list[EventStatsTier]
     gate_breakdown: list[EventStatsGate]
     tickets: list[EventStatsTicket]
+    waitlist: list[WaitlistEntryOut] = []
+

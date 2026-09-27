@@ -13,9 +13,11 @@ from .schemas import (
     GateCreate,
     GateStatus,
     PriorScan,
+    PromotedAttendeeInfo,
     ScanCreate,
     ScanResult,
     TicketCreate,
+    WaitlistEntryOut,
 )
 from .security import sign_ticket, ticket_id_from_signature
 
@@ -51,6 +53,45 @@ def join_waitlist(
     return entry
 
 
+def _issue_ticket_record(
+    db: Session,
+    event_id: int,
+    attendee_name: str,
+    attendee_contact: str,
+    campus_id: str | None,
+    tier: str,
+) -> Ticket:
+    tier = tier.strip().lower()
+    if tier not in TIER_PREFIXES:
+        tier = "general"
+
+    tier_issued_count = db.query(Ticket).filter(Ticket.event_id == event_id, Ticket.tier == tier).count()
+    seat_number = f"{TIER_PREFIXES[tier]}-{tier_issued_count + 1:03d}"
+
+    clean_campus_id = campus_id.strip() if campus_id else str(attendee_contact).lower()
+    attendee = db.query(Attendee).filter(Attendee.campus_id == clean_campus_id).one_or_none()
+    if attendee is None:
+        attendee = Attendee(
+            name=attendee_name.strip(),
+            campus_id=clean_campus_id,
+            contact_email=str(attendee_contact).lower(),
+        )
+        db.add(attendee)
+        db.flush()
+
+    ticket = Ticket(
+        event_id=event_id,
+        attendee_id=attendee.id,
+        tier=tier,
+        seat_number=seat_number,
+        status="issued",
+    )
+    db.add(ticket)
+    db.flush()
+    ticket.qr_signature = sign_ticket(ticket.id)
+    return ticket
+
+
 def issue_ticket(db: Session, payload: TicketCreate) -> Ticket | WaitlistEntry:
     event = db.get(Event, payload.event_id)
     if event is None:
@@ -60,7 +101,7 @@ def issue_ticket(db: Session, payload: TicketCreate) -> Ticket | WaitlistEntry:
     if tier not in TIER_PREFIXES:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Choose General, Premium, or VIP seating")
 
-    issued_count = db.query(Ticket).filter(Ticket.event_id == event.id).count()
+    issued_count = db.query(Ticket).filter(Ticket.event_id == event.id, Ticket.status != "revoked").count()
     if issued_count >= event.capacity:
         return join_waitlist(
             db=db,
@@ -71,30 +112,14 @@ def issue_ticket(db: Session, payload: TicketCreate) -> Ticket | WaitlistEntry:
             tier=tier,
         )
 
-    tier_issued_count = db.query(Ticket).filter(Ticket.event_id == event.id, Ticket.tier == tier).count()
-    seat_number = f"{TIER_PREFIXES[tier]}-{tier_issued_count + 1:03d}"
-
-    campus_id = payload.campus_id or payload.attendee_contact.lower()
-    attendee = db.query(Attendee).filter(Attendee.campus_id == campus_id).one_or_none()
-    if attendee is None:
-        attendee = Attendee(
-            name=payload.attendee_name.strip(),
-            campus_id=campus_id,
-            contact_email=str(payload.attendee_contact).lower(),
-        )
-        db.add(attendee)
-        db.flush()
-
-    ticket = Ticket(
+    ticket = _issue_ticket_record(
+        db=db,
         event_id=event.id,
-        attendee_id=attendee.id,
+        attendee_name=payload.attendee_name,
+        attendee_contact=str(payload.attendee_contact),
+        campus_id=payload.campus_id,
         tier=tier,
-        seat_number=seat_number,
-        status="issued",
     )
-    db.add(ticket)
-    db.flush()
-    ticket.qr_signature = sign_ticket(ticket.id)
     db.commit()
     db.refresh(ticket)
     return ticket
@@ -108,11 +133,62 @@ def revoke_ticket(db: Session, ticket_id: int) -> Ticket:
     if ticket.status == "revoked":
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Ticket already revoked")
 
-    ticket.status = "revoked"
-    ticket.revoked_at = datetime.now(UTC).replace(tzinfo=None)
-    db.commit()
-    db.refresh(ticket)
-    return ticket
+    try:
+        ticket.status = "revoked"
+        ticket.revoked_at = datetime.now(UTC).replace(tzinfo=None)
+        db.flush()
+
+        event_id = ticket.event_id
+        waitlist_entry = (
+            db.query(WaitlistEntry)
+            .filter(WaitlistEntry.event_id == event_id, WaitlistEntry.status == "waiting")
+            .order_by(WaitlistEntry.position.asc())
+            .first()
+        )
+
+        promoted_info: PromotedAttendeeInfo | None = None
+        if waitlist_entry is not None:
+            old_position = waitlist_entry.position
+
+            new_ticket = _issue_ticket_record(
+                db=db,
+                event_id=event_id,
+                attendee_name=waitlist_entry.attendee_name,
+                attendee_contact=waitlist_entry.attendee_contact,
+                campus_id=waitlist_entry.campus_id,
+                tier=waitlist_entry.tier,
+            )
+
+            waitlist_entry.status = "promoted"
+            db.flush()
+
+            remaining_waiting = (
+                db.query(WaitlistEntry)
+                .filter(
+                    WaitlistEntry.event_id == event_id,
+                    WaitlistEntry.status == "waiting",
+                    WaitlistEntry.position > old_position,
+                )
+                .order_by(WaitlistEntry.position.asc())
+                .all()
+            )
+            for entry in remaining_waiting:
+                entry.position -= 1
+            db.flush()
+
+            promoted_info = PromotedAttendeeInfo(
+                attendee_name=waitlist_entry.attendee_name,
+                new_ticket_id=new_ticket.id,
+                tier=new_ticket.tier,
+            )
+
+        db.commit()
+        db.refresh(ticket)
+        ticket.promoted_attendee = promoted_info
+        return ticket
+    except Exception:
+        db.rollback()
+        raise
 
 
 
@@ -342,6 +418,27 @@ def get_event_stats(db: Session, event_id: int) -> EventStatsOut:
         for gate in gates
     ]
 
+    waitlist_entries = (
+        db.query(WaitlistEntry)
+        .filter(WaitlistEntry.event_id == event_id, WaitlistEntry.status == "waiting")
+        .order_by(WaitlistEntry.position.asc())
+        .all()
+    )
+    waitlist_rows = [
+        WaitlistEntryOut(
+            id=entry.id,
+            event_id=entry.event_id,
+            attendee_name=entry.attendee_name,
+            attendee_contact=entry.attendee_contact,
+            campus_id=entry.campus_id,
+            tier=entry.tier,
+            position=entry.position,
+            status=entry.status,
+            created_at=entry.created_at,
+        )
+        for entry in waitlist_entries
+    ]
+
     return EventStatsOut(
         event_id=event.id,
         title=event.title,
@@ -355,6 +452,7 @@ def get_event_stats(db: Session, event_id: int) -> EventStatsOut:
         tier_breakdown=tier_breakdown,
         gate_breakdown=gate_breakdown,
         tickets=ticket_rows,
+        waitlist=waitlist_rows,
     )
 
 

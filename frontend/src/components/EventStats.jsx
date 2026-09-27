@@ -24,25 +24,33 @@ export function EventStats({ eventId, onRevokeTicket }) {
   const [filter, setFilter] = useState("all");
   const [revokingId, setRevokingId] = useState(null);
   const [revokeError, setRevokeError] = useState("");
+  const [promotedInfo, setPromotedInfo] = useState({});
 
   async function handleRevoke(ticketId) {
     setRevokeError("");
     setRevokingId(ticketId);
     try {
-      if (onRevokeTicket) {
-        await onRevokeTicket(ticketId);
-      } else {
-        await revokeTicket(ticketId);
-      }
-      setStats((prev) => {
-        if (!prev) return prev;
-        return {
+      const res = onRevokeTicket ? await onRevokeTicket(ticketId) : await revokeTicket(ticketId);
+      if (res?.promoted_attendee) {
+        setPromotedInfo((prev) => ({
           ...prev,
-          tickets: prev.tickets.map((t) =>
-            t.ticket_id === ticketId ? { ...t, status: "revoked" } : t
-          ),
-        };
-      });
+          [ticketId]: res.promoted_attendee,
+        }));
+      }
+      try {
+        const freshStats = await getEventStats(eventId);
+        setStats(freshStats);
+      } catch {
+        setStats((prev) => {
+          if (!prev) return prev;
+          return {
+            ...prev,
+            tickets: prev.tickets.map((t) =>
+              t.ticket_id === ticketId ? { ...t, status: "revoked" } : t
+            ),
+          };
+        });
+      }
     } catch (err) {
       setRevokeError(err instanceof Error ? err.message : "Could not revoke ticket");
     } finally {
@@ -287,6 +295,48 @@ export function EventStats({ eventId, onRevokeTicket }) {
 
           <div className="stats-section">
             <div className="row-heading">
+              <h3>Waitlist</h3>
+              <span className="sync-state">{(stats.waitlist || []).length} waiting</span>
+            </div>
+            {(!stats.waitlist || stats.waitlist.length === 0) ? (
+              <p className="muted-text">No attendees currently on the waitlist.</p>
+            ) : (
+              <div className="stats-table-wrap">
+                <table className="stats-table">
+                  <thead>
+                    <tr>
+                      <th style={{ width: "80px" }}>Position</th>
+                      <th>Attendee</th>
+                      <th>Tier</th>
+                      <th>Contact</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {stats.waitlist.map((entry) => (
+                      <tr key={entry.id}>
+                        <td>
+                          <strong>#{entry.position}</strong>
+                        </td>
+                        <td>
+                          <strong>{entry.attendee_name}</strong>
+                          {entry.campus_id && <small className="stats-sub">{entry.campus_id}</small>}
+                        </td>
+                        <td>
+                          <span className="capitalize">{entry.tier}</span>
+                        </td>
+                        <td>
+                          <span>{entry.attendee_contact}</span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          <div className="stats-section">
+            <div className="row-heading">
               <h3>Who got a ticket and where it was checked</h3>
               <span className="sync-state">{filteredTickets.length} shown</span>
             </div>
@@ -369,7 +419,7 @@ export function EventStats({ eventId, onRevokeTicket }) {
                           )}
                         </td>
                         <td>
-                          <div style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
+                          <div style={{ display: "inline-flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
                             <button
                               type="button"
                               className="ghost-button revoke-button"
@@ -382,6 +432,11 @@ export function EventStats({ eventId, onRevokeTicket }) {
                             {ticket.status === "revoked" && (
                               <span className="inline-revoked-confirm" style={{ fontSize: "0.8rem", color: "var(--danger, #dc2626)", fontWeight: 600 }}>
                                 Revoked
+                                {promotedInfo[ticket.ticket_id] && (
+                                  <span className="inline-promoted-confirm" style={{ color: "var(--text-muted, #475569)", marginLeft: "4px", fontWeight: 500 }}>
+                                    {` -- seat given to ${promotedInfo[ticket.ticket_id].attendee_name} from the waitlist.`}
+                                  </span>
+                                )}
                               </span>
                             )}
                           </div>

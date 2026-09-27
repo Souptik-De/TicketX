@@ -120,3 +120,7 @@ export function revokeTicket(ticketId) {
   });
 }
 
+export function getEventWaitlist(eventId) {
+  return request(`/events/${eventId}/waitlist`);
+}
+
