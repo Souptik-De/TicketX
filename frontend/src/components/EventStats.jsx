@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { BarChart3, DoorOpen, Search, TicketCheck, UsersRound } from "lucide-react";
+import { BarChart3, DoorOpen, Download, Search, TicketCheck, UsersRound } from "lucide-react";
 import {
   Bar,
   BarChart,
@@ -14,7 +14,7 @@ import {
   YAxis,
 } from "recharts";
 
-import { getEventStats, revokeTicket } from "../lib/api";
+import { exportAttendanceCsv, getEventStats, revokeTicket } from "../lib/api";
 
 export function EventStats({ eventId, onRevokeTicket }) {
   const [stats, setStats] = useState(null);
@@ -25,6 +25,29 @@ export function EventStats({ eventId, onRevokeTicket }) {
   const [revokingId, setRevokingId] = useState(null);
   const [revokeError, setRevokeError] = useState("");
   const [promotedInfo, setPromotedInfo] = useState({});
+  const [isExporting, setIsExporting] = useState(false);
+  const [exportError, setExportError] = useState("");
+
+  async function handleExportCsv() {
+    if (!eventId) return;
+    setExportError("");
+    setIsExporting(true);
+    try {
+      const { blob, filename } = await exportAttendanceCsv(eventId);
+      const downloadUrl = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = downloadUrl;
+      link.download = filename || `event-${eventId}-attendance.csv`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(downloadUrl);
+    } catch (err) {
+      setExportError(err instanceof Error ? err.message : "Could not export attendance CSV");
+    } finally {
+      setIsExporting(false);
+    }
+  }
 
   async function handleRevoke(ticketId) {
     setRevokeError("");
@@ -148,9 +171,27 @@ export function EventStats({ eventId, onRevokeTicket }) {
           <h2>EventDetails</h2>
         </div>
         {stats && (
-          <span className="sync-state">
-            {stats.checked_in} of {stats.issued} checked in ({stats.check_in_rate}%)
-          </span>
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "6px" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap", justifyContent: "flex-end" }}>
+              <span className="sync-state">
+                {stats.checked_in} of {stats.issued} checked in ({stats.check_in_rate}%)
+              </span>
+              <button
+                className="ghost-button"
+                type="button"
+                onClick={handleExportCsv}
+                disabled={isExporting}
+              >
+                <Download size={16} aria-hidden="true" />
+                {isExporting ? "Exporting..." : "Export Attendance CSV"}
+              </button>
+            </div>
+            {exportError && (
+              <p className="error-text" style={{ margin: 0, fontSize: "0.85rem" }}>
+                {exportError}
+              </p>
+            )}
+          </div>
         )}
       </div>
 

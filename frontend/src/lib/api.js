@@ -124,3 +124,34 @@ export function getEventWaitlist(eventId) {
   return request(`/events/${eventId}/waitlist`);
 }
 
+export async function exportAttendanceCsv(eventId) {
+  const authHeaders = authToken ? { Authorization: `Bearer ${authToken}` } : {};
+  const response = await fetch(`${API_BASE}/events/${eventId}/export`, {
+    headers: { ...authHeaders },
+  });
+
+  if (!response.ok) {
+    const problem = await response.json().catch(() => ({ detail: "Export failed" }));
+    let message = "Export failed";
+    if (typeof problem.detail === "string") {
+      message = problem.detail;
+    } else if (Array.isArray(problem.detail)) {
+      message = problem.detail.map((e) => e.msg || JSON.stringify(e)).join(", ");
+    }
+    throw new Error(message);
+  }
+
+  const blob = await response.blob();
+  const disposition = response.headers.get("Content-Disposition");
+  let filename = `event-${eventId}-attendance.csv`;
+  if (disposition) {
+    const match = disposition.match(/filename="?([^";]+)"?/);
+    if (match?.[1]) {
+      filename = match[1];
+    }
+  }
+
+  return { blob, filename };
+}
+
+
