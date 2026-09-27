@@ -610,6 +610,32 @@ def get_event_stats(db: Session, event_id: int) -> EventStatsOut:
         for entry in waitlist_entries
     ]
 
+    # Recently promoted, so an admin revoking a seat can confirm the next person
+    # in line actually received it rather than the seat silently vanishing.
+    promoted_entries = (
+        db.query(WaitlistEntry)
+        .filter(WaitlistEntry.event_id == event_id, WaitlistEntry.status == "promoted")
+        .order_by(WaitlistEntry.resolved_at.desc(), WaitlistEntry.id.desc())
+        .limit(5)
+        .all()
+    )
+    promoted_rows = [
+        WaitlistEntryOut(
+            id=entry.id,
+            event_id=entry.event_id,
+            attendee_name=entry.attendee_name,
+            attendee_contact=entry.attendee_contact,
+            campus_id=entry.campus_id,
+            tier=entry.tier,
+            position=entry.position,
+            status=entry.status,
+            created_at=entry.created_at,
+            promoted_ticket_id=entry.promoted_ticket_id,
+            resolved_at=entry.resolved_at,
+        )
+        for entry in promoted_entries
+    ]
+
     return EventStatsOut(
         event_id=event.id,
         title=event.title,
@@ -624,6 +650,7 @@ def get_event_stats(db: Session, event_id: int) -> EventStatsOut:
         gate_breakdown=gate_breakdown,
         tickets=ticket_rows,
         waitlist=waitlist_rows,
+        promoted=promoted_rows,
     )
 
 

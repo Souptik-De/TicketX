@@ -145,7 +145,8 @@ export function TicketPreview({ ticket }) {
             This event is full. You've been added to the waitlist at position #{ticket.position}.
           </p>
           <p className="muted-text">
-            No QR code or seat is assigned while waitlisted. We'll notify you if a ticket becomes available.
+            No QR code or seat is assigned while you wait. If a seat opens up it goes to the
+            person at the front of the line, and your ticket appears in your waitlist panel.
           </p>
         </div>
       </section>

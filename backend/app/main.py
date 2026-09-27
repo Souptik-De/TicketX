@@ -27,6 +27,7 @@ from .schemas import (
     TicketCreate,
     TicketCreated,
     TicketDetail,
+    TicketIssuanceResponse,
     WaitlistJoinResponse,
     RevokeTicketResponse,
     UserOut,
@@ -215,13 +216,13 @@ def add_gate(payload: GateCreate, _: User = Depends(require_roles("admin")), db:
     return create_gate(db, payload)
 
 
-@app.post("/tickets", response_model=TicketCreated | WaitlistJoinResponse, status_code=status.HTTP_201_CREATED)
+@app.post("/tickets", response_model=TicketIssuanceResponse, status_code=status.HTTP_201_CREATED)
 def create_ticket(
     payload: TicketCreate,
     response: Response,
     current_user: User = Depends(require_roles("user")),
     db: Session = Depends(get_db),
-) -> TicketCreated | WaitlistJoinResponse:
+) -> TicketIssuanceResponse:
     result = issue_ticket(db, payload, user_id=current_user.id)
     if isinstance(result, WaitlistEntry):
         return WaitlistJoinResponse(

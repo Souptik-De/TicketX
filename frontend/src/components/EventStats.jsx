@@ -156,7 +156,9 @@ export function EventStats({ eventId, onRevokeTicket }) {
     const tickets = stats.tickets || [];
     const totalIssued = stats.issued;
     const checkedIn = stats.checked_in;
-    const noShows = tickets.filter((t) => t.status === "issued").length;
+    // Derived from the server's own figures so the four tiles always reconcile:
+    // checked in + no-shows equals issued, and revoked sits outside that total.
+    const noShows = Math.max(totalIssued - checkedIn, 0);
     const revoked = tickets.filter((t) => t.status === "revoked").length;
     const checkInRate = stats.check_in_rate;
     return {
@@ -275,7 +277,7 @@ export function EventStats({ eventId, onRevokeTicket }) {
             <div>
               <BarChart3 size={20} aria-hidden="true" />
               <span>Still outside</span>
-              <strong>{stats.issued - stats.checked_in}</strong>
+              <strong>{Math.max(stats.issued - stats.checked_in, 0)}</strong>
             </div>
           </div>
 
@@ -431,6 +433,28 @@ export function EventStats({ eventId, onRevokeTicket }) {
                     ))}
                   </tbody>
                 </table>
+              </div>
+            )}
+            {(stats.promoted || []).length > 0 && (
+              <div className="promoted-block">
+                <p className="stats-sub">
+                  Recently given a seat from the waitlist
+                </p>
+                <ul className="promoted-list">
+                  {stats.promoted.map((entry) => (
+                    <li key={entry.id}>
+                      <span>
+                        <strong>{entry.attendee_name}</strong>
+                        {entry.promoted_ticket_id ? (
+                          <span className="muted-text"> - ticket #{entry.promoted_ticket_id} issued</span>
+                        ) : (
+                          <span className="muted-text"> - marked promoted</span>
+                        )}
+                      </span>
+                      <span className="status-pill in">Promoted</span>
+                    </li>
+                  ))}
+                </ul>
               </div>
             )}
           </div>

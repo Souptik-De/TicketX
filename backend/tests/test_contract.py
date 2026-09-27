@@ -1486,3 +1486,78 @@ def test_me_registrations_requires_a_token() -> None:
     client = TestClient(app)
 
     assert client.get("/me/registrations").status_code == 401
+
+def test_admin_stats_confirms_a_promotion_reached_the_waitlist() -> None:
+    """ET-11 hook, seen from the admin side: revoking a seat must be auditable
+    as 'this person got it', not just as a counter moving."""
+    reset_database()
+    client = TestClient(app)
+    admin_headers = auth_headers(client, "admin", "admin123")
+    user_headers = auth_headers(client, "attendee", "attendee123")
+    event_id = _capacity_one_event(client, admin_headers, "Promotion Audit")
+
+    holder = client.post(
+        "/tickets",
+        json={"event_id": event_id, "attendee_name": "Seat Holder", "attendee_contact": "holder@example.edu"},
+        headers=user_headers,
+    ).json()
+    client.post(
+        "/tickets",
+        json={
+            "event_id": event_id,
+            "attendee_name": "Next In Line",
+            "attendee_contact": "next@example.edu",
+            "campus_id": "CAMP-NEXT",
+        },
+        headers=user_headers,
+    )
+
+    before = client.get(f"/events/{event_id}/stats", headers=admin_headers).json()
+    assert [row["position"] for row in before["waitlist"]] == [1]
+    assert before["promoted"] == []
+
+    client.post(f"/tickets/{holder['ticket_id']}/revoke", headers=admin_headers)
+
+    after = client.get(f"/events/{event_id}/stats", headers=admin_headers).json()
+    assert after["waitlist"] == []
+    assert len(after["promoted"]) == 1
+    promoted = after["promoted"][0]
+    assert promoted["attendee_name"] == "Next In Line"
+    assert promoted["status"] == "promoted"
+    assert promoted["promoted_ticket_id"] is not None
+    assert promoted["resolved_at"] is not None
+
+    # The promoted ticket is counted as issued, and the revoked one is not.
+    assert after["issued"] == 1
+    assert {row["status"] for row in after["tickets"]} == {"issued", "revoked"}
+
+
+def test_withdrawn_entry_is_absent_from_the_admin_waitlist() -> None:
+    reset_database()
+    client = TestClient(app)
+    admin_headers = auth_headers(client, "admin", "admin123")
+    user_headers = auth_headers(client, "attendee", "attendee123")
+    event_id = _capacity_one_event(client, admin_headers, "Withdrawal Audit")
+
+    client.post(
+        "/tickets",
+        json={"event_id": event_id, "attendee_name": "Seat Holder", "attendee_contact": "holder@example.edu"},
+        headers=user_headers,
+    )
+    entry = client.post(
+        "/tickets",
+        json={
+            "event_id": event_id,
+            "attendee_name": "Gives Up",
+            "attendee_contact": "givesup@example.edu",
+            "campus_id": "CAMP-GIVEUP",
+        },
+        headers=user_headers,
+    ).json()
+
+    client.delete(f"/me/waitlist/{entry['waitlist_entry_id']}", headers=user_headers)
+
+    stats = client.get(f"/events/{event_id}/stats", headers=admin_headers).json()
+    assert stats["waitlist"] == []
+    # A withdrawal is neither a promotion nor a live place in the queue.
+    assert stats["promoted"] == []

@@ -58,11 +58,6 @@ export function getEvents() {
   return request("/events");
 }
 
-export function getGates(eventId) {
-  const query = eventId ? `?event_id=${eventId}` : "";
-  return request(`/gates${query}`);
-}
-
 export function createEvent(payload) {
   return request("/events", {
     method: "POST",
@@ -120,8 +115,18 @@ export function revokeTicket(ticketId) {
   });
 }
 
-export function getEventWaitlist(eventId) {
-  return request(`/events/${eventId}/waitlist`);
+/**
+ * ET-07: the caller's own waitlist places, polled to show a live position and to
+ * pick up a ticket that a promotion issued them.
+ */
+export function getMyRegistrations() {
+  return request("/me/registrations");
+}
+
+export function leaveWaitlist(entryId) {
+  return request(`/me/waitlist/${entryId}`, {
+    method: "DELETE",
+  });
 }
 
 export async function exportAttendanceCsv(eventId) {

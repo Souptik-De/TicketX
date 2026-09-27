@@ -258,6 +258,10 @@ class WaitlistEntryOut(BaseModel):
     position: int
     status: str
     created_at: datetime | None = None
+    # Set once ET-11's revocation has issued this person's ticket, so an admin
+    # can see that a seat really went to the waitlist and not into the void.
+    promoted_ticket_id: int | None = None
+    resolved_at: datetime | None = None
 
 
 class EventStatsOut(BaseModel):
@@ -274,4 +278,5 @@ class EventStatsOut(BaseModel):
     gate_breakdown: list[EventStatsGate]
     tickets: list[EventStatsTicket]
     waitlist: list[WaitlistEntryOut] = []
+    promoted: list[WaitlistEntryOut] = []
 
