@@ -1,3 +1,5 @@
+import csv
+import io
 import os
 import tempfile
 from pathlib import Path
@@ -939,6 +941,156 @@ def test_revoke_ticket_with_empty_waitlist_noop() -> None:
     second_revoke = client.post(f"/tickets/{ticket_id}/revoke", headers=admin_headers)
     assert second_revoke.status_code == 409
     assert "already revoked" in second_revoke.json()["detail"].lower()
+
+
+def test_export_attendance_csv() -> None:
+    reset_database()
+    client = TestClient(app)
+    admin_headers = auth_headers(client, "admin", "admin123")
+    user_headers = auth_headers(client, "attendee", "attendee123")
+    scanner_headers = auth_headers(client, "scanner", "scanner123")
+
+    event_id = 1
+
+    # Given: an event with three tickets -- one scanned (checked in at a specific gate),
+    # one never scanned (no-show), and one revoked (reusing revoke_ticket flow from ET-11)
+    # 1. Scanned ticket
+    res_ticket_1 = client.post(
+        "/tickets",
+        json={
+            "event_id": event_id,
+            "attendee_name": "Alice Scanned",
+            "attendee_contact": "alice@example.edu",
+            "campus_id": "CAMPUS-001",
+            "tier": "general",
+        },
+        headers=user_headers,
+    )
+    assert res_ticket_1.status_code == 201
+    ticket_1 = res_ticket_1.json()
+
+    scan_res = client.post(
+        "/scans",
+        json={"qr_signature": ticket_1["qr_signature"], "gate_id": 1, "volunteer_id": 1},
+        headers=scanner_headers,
+    )
+    assert scan_res.status_code == 200
+    assert scan_res.json()["result"] == "valid"
+
+    # 2. Never scanned ticket (no-show)
+    res_ticket_2 = client.post(
+        "/tickets",
+        json={
+            "event_id": event_id,
+            "attendee_name": "Bob Noshow",
+            "attendee_contact": "bob@example.edu",
+            "campus_id": "CAMPUS-002",
+            "tier": "premium",
+        },
+        headers=user_headers,
+    )
+    assert res_ticket_2.status_code == 201
+
+    # 3. Revoked ticket
+    res_ticket_3 = client.post(
+        "/tickets",
+        json={
+            "event_id": event_id,
+            "attendee_name": "Charlie Revoked",
+            "attendee_contact": "charlie@example.edu",
+            "campus_id": "CAMPUS-003",
+            "tier": "vip",
+        },
+        headers=user_headers,
+    )
+    assert res_ticket_3.status_code == 201
+    ticket_3 = res_ticket_3.json()
+
+    revoke_res = client.post(f"/tickets/{ticket_3['ticket_id']}/revoke", headers=admin_headers)
+    assert revoke_res.status_code == 200
+
+    # When: an admin calls GET /events/{event_id}/export
+    response = client.get(f"/events/{event_id}/export", headers=admin_headers)
+
+    # Then: assert the response has media_type "text/csv" and a Content-Disposition header containing the expected filename
+    assert response.status_code == 200
+    assert "text/csv" in response.headers.get("content-type", "")
+    assert f'filename="event-{event_id}-attendance.csv"' in response.headers.get("content-disposition", "")
+
+    # And: parse the returned CSV body (use Python's csv.reader on the response text) and assert:
+    reader = list(csv.reader(io.StringIO(response.text)))
+    # - exactly 3 data rows (plus the header row)
+    assert len(reader) == 4
+
+    header = reader[0]
+    assert header == [
+        "Attendee Name",
+        "Contact Email",
+        "Campus ID",
+        "Tier",
+        "Seat Number",
+        "Status",
+        "Gate",
+        "Check-in Timestamp",
+    ]
+
+    rows_by_name = {row[0]: row for row in reader[1:]}
+
+    # - the checked-in row has the correct Gate and a non-empty Check-in Timestamp
+    alice_row = rows_by_name["Alice Scanned"]
+    assert alice_row[1] == "alice@example.edu"
+    assert alice_row[2] == "CAMPUS-001"
+    assert alice_row[3] == "general"
+    assert alice_row[5] == "Checked in"
+    assert alice_row[6] == "Main Gate"
+    assert alice_row[7] != ""
+
+    # - the no-show row has Status "No-show" and empty Gate/Timestamp
+    bob_row = rows_by_name["Bob Noshow"]
+    assert bob_row[1] == "bob@example.edu"
+    assert bob_row[2] == "CAMPUS-002"
+    assert bob_row[3] == "premium"
+    assert bob_row[5] == "No-show"
+    assert bob_row[6] == ""
+    assert bob_row[7] == ""
+
+    # - the revoked row has Status "Revoked" and empty Gate/Timestamp
+    charlie_row = rows_by_name["Charlie Revoked"]
+    assert charlie_row[1] == "charlie@example.edu"
+    assert charlie_row[2] == "CAMPUS-003"
+    assert charlie_row[3] == "vip"
+    assert charlie_row[5] == "Revoked"
+    assert charlie_row[6] == ""
+    assert charlie_row[7] == ""
+
+
+def test_export_attendance_role_protection() -> None:
+    reset_database()
+    client = TestClient(app)
+    user_headers = auth_headers(client, "attendee", "attendee123")
+    scanner_headers = auth_headers(client, "scanner", "scanner123")
+
+    # Unauthenticated call is rejected (401)
+    unauth_response = client.get("/events/1/export")
+    assert unauth_response.status_code == 401
+
+    # Non-admin call is rejected (403)
+    user_response = client.get("/events/1/export", headers=user_headers)
+    assert user_response.status_code == 403
+
+    scanner_response = client.get("/events/1/export", headers=scanner_headers)
+    assert scanner_response.status_code == 403
+
+
+def test_export_attendance_nonexistent_event_404() -> None:
+    reset_database()
+    client = TestClient(app)
+    admin_headers = auth_headers(client, "admin", "admin123")
+
+    response = client.get("/events/999/export", headers=admin_headers)
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Event not found"
+
 
 
 

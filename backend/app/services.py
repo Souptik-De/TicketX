@@ -1,4 +1,6 @@
+import csv
 from datetime import UTC, datetime
+import io
 
 from fastapi import HTTPException, status
 from sqlalchemy import func
@@ -454,6 +456,57 @@ def get_event_stats(db: Session, event_id: int) -> EventStatsOut:
         tickets=ticket_rows,
         waitlist=waitlist_rows,
     )
+
+
+def build_attendance_csv(db: Session, event_id: int) -> str:
+    stats = get_event_stats(db, event_id)
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow([
+        "Attendee Name",
+        "Contact Email",
+        "Campus ID",
+        "Tier",
+        "Seat Number",
+        "Status",
+        "Gate",
+        "Check-in Timestamp",
+    ])
+
+    for ticket in stats.tickets:
+        if ticket.status == "used":
+            export_status = "Checked in"
+            gate = ticket.check_gate_name or ""
+            check_in_timestamp = (
+                ticket.checked_at.isoformat()
+                if ticket.checked_at and hasattr(ticket.checked_at, "isoformat")
+                else str(ticket.checked_at) if ticket.checked_at else ""
+            )
+        elif ticket.status == "issued":
+            export_status = "No-show"
+            gate = ""
+            check_in_timestamp = ""
+        elif ticket.status == "revoked":
+            export_status = "Revoked"
+            gate = ""
+            check_in_timestamp = ""
+        else:
+            export_status = ticket.status
+            gate = ""
+            check_in_timestamp = ""
+
+        writer.writerow([
+            ticket.attendee_name or "",
+            ticket.contact_email or "",
+            ticket.campus_id or "",
+            ticket.tier or "",
+            ticket.seat_number or "",
+            export_status,
+            gate,
+            check_in_timestamp,
+        ])
+
+    return output.getvalue()
 
 
 def _username_from_email(db: Session, email: str, sub: str) -> str:

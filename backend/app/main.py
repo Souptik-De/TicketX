@@ -1,8 +1,10 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+import io
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Response, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session, joinedload, subqueryload
 
 from .auth import create_token, hash_password, require_roles, verify_password
@@ -33,6 +35,7 @@ from .schemas import (
 )
 from .seed import seed_reference_data
 from .services import (
+    build_attendance_csv,
     create_gate,
     get_event_stats,
     get_gate_status,
@@ -171,6 +174,22 @@ def event_stats(
     db: Session = Depends(get_db),
 ) -> EventStatsOut:
     return get_event_stats(db, event_id)
+
+
+@app.get("/events/{event_id}/export")
+def export_attendance_csv(
+    event_id: int,
+    _: User = Depends(require_roles("admin")),
+    db: Session = Depends(get_db),
+) -> StreamingResponse:
+    csv_data = build_attendance_csv(db, event_id)
+    return StreamingResponse(
+        io.StringIO(csv_data),
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": f'attachment; filename="event-{event_id}-attendance.csv"'
+        },
+    )
 
 
 @app.get("/volunteers", response_model=list[VolunteerOut])
