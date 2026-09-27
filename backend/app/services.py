@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import UTC, datetime
 
 from fastapi import HTTPException, status
 from sqlalchemy import func
@@ -63,6 +63,22 @@ def issue_ticket(db: Session, payload: TicketCreate) -> Ticket:
     db.commit()
     db.refresh(ticket)
     return ticket
+
+
+def revoke_ticket(db: Session, ticket_id: int) -> Ticket:
+    ticket = db.get(Ticket, ticket_id)
+    if ticket is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ticket not found")
+
+    if ticket.status == "revoked":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Ticket already revoked")
+
+    ticket.status = "revoked"
+    ticket.revoked_at = datetime.now(UTC).replace(tzinfo=None)
+    db.commit()
+    db.refresh(ticket)
+    return ticket
+
 
 
 def find_ticket_by_scan_payload(db: Session, payload: ScanCreate) -> Ticket | None:

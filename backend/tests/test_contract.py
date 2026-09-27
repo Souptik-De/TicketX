@@ -644,3 +644,45 @@ def test_admin_registration_rejected() -> None:
     )
     assert admin_res.status_code in (422, 403)
 
+
+def test_revoke_ticket_and_scan_rejection() -> None:
+    reset_database()
+    client = TestClient(app)
+    admin_headers = auth_headers(client, "admin", "admin123")
+    user_headers = auth_headers(client, "attendee", "attendee123")
+    scanner_headers = auth_headers(client, "scanner", "scanner123")
+
+    # Given: an issued ticket for an event
+    ticket = issue_demo_ticket(client, user_headers)
+    ticket_id = ticket["ticket_id"]
+
+    # When: admin revokes the ticket via POST /tickets/{ticket_id}/revoke
+    revoke_response = client.post(f"/tickets/{ticket_id}/revoke", headers=admin_headers)
+    assert revoke_response.status_code == 200
+    revoke_data = revoke_response.json()
+    assert revoke_data["ticket_id"] == ticket_id
+    assert revoke_data["status"] == "revoked"
+    assert revoke_data["revoked_at"] is not None
+
+    # Then: attempting to scan it is rejected specifically because it is revoked
+    scan_response = client.post(
+        "/scans",
+        json={"qr_signature": ticket["qr_signature"], "gate_id": 1, "volunteer_id": 1},
+        headers=scanner_headers,
+    )
+    assert scan_response.status_code == 200
+    scan_data = scan_response.json()
+    assert scan_data["result"] == "invalid"
+    assert "revoked" in scan_data["message"].lower()
+    # Specifically not a duplicate or invalid signature rejection
+    assert scan_data["result"] != "duplicate"
+    assert "duplicate" not in scan_data["message"].lower()
+    assert "already used" not in scan_data["message"].lower()
+    assert "could not be verified" not in scan_data["message"].lower()
+
+    # And: a second revoke attempt on the same ticket returns 409
+    second_revoke = client.post(f"/tickets/{ticket_id}/revoke", headers=admin_headers)
+    assert second_revoke.status_code == 409
+    assert "already revoked" in second_revoke.json()["detail"].lower()
+
+

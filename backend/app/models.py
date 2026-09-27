@@ -61,8 +61,10 @@ class Ticket(Base):
     qr_signature: Mapped[str | None] = mapped_column(String(180), unique=True, nullable=True)
     tier: Mapped[str] = mapped_column(String(40), default="general", nullable=False)
     seat_number: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    # status allowed values: "issued", "used", "revoked"
     status: Mapped[str] = mapped_column(String(20), default="issued", nullable=False)
     issued_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC).replace(tzinfo=None), nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, default=None)
     event_id: Mapped[int] = mapped_column(ForeignKey("events.event_id"), nullable=False)
     attendee_id: Mapped[int] = mapped_column(ForeignKey("attendees.attendee_id"), nullable=False)
 

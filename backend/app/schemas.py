@@ -97,6 +97,15 @@ class TicketDetail(BaseModel):
     attendee: AttendeeOut
 
 
+class RevokeTicketResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    ticket_id: int
+    status: str
+    revoked_at: datetime | None = None
+
+
+
 class ScanCreate(BaseModel):
     ticket_id: int | None = None
     qr_signature: str | None = None

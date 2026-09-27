@@ -14,14 +14,41 @@ import {
   YAxis,
 } from "recharts";
 
-import { getEventStats } from "../lib/api";
+import { getEventStats, revokeTicket } from "../lib/api";
 
-export function EventStats({ eventId }) {
+export function EventStats({ eventId, onRevokeTicket }) {
   const [stats, setStats] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("all");
+  const [revokingId, setRevokingId] = useState(null);
+  const [revokeError, setRevokeError] = useState("");
+
+  async function handleRevoke(ticketId) {
+    setRevokeError("");
+    setRevokingId(ticketId);
+    try {
+      if (onRevokeTicket) {
+        await onRevokeTicket(ticketId);
+      } else {
+        await revokeTicket(ticketId);
+      }
+      setStats((prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          tickets: prev.tickets.map((t) =>
+            t.ticket_id === ticketId ? { ...t, status: "revoked" } : t
+          ),
+        };
+      });
+    } catch (err) {
+      setRevokeError(err instanceof Error ? err.message : "Could not revoke ticket");
+    } finally {
+      setRevokingId(null);
+    }
+  }
 
   useEffect(() => {
     if (!eventId) {
@@ -290,6 +317,7 @@ export function EventStats({ eventId }) {
               </div>
             </div>
 
+            {revokeError && <p className="error-text">{revokeError}</p>}
             {filteredTickets.length === 0 ? (
               <p className="muted-text">No tickets match this view yet.</p>
             ) : (
@@ -301,6 +329,7 @@ export function EventStats({ eventId }) {
                       <th>Ticket</th>
                       <th>Status</th>
                       <th>Checked at</th>
+                      <th>Action</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -338,6 +367,24 @@ export function EventStats({ eventId }) {
                           ) : (
                             <span className="muted-text">Not scanned yet</span>
                           )}
+                        </td>
+                        <td>
+                          <div style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
+                            <button
+                              type="button"
+                              className="ghost-button revoke-button"
+                              style={{ padding: "4px 8px", fontSize: "0.8rem", color: "var(--danger, #dc2626)" }}
+                              disabled={ticket.status === "revoked" || revokingId === ticket.ticket_id}
+                              onClick={() => handleRevoke(ticket.ticket_id)}
+                            >
+                              {revokingId === ticket.ticket_id ? "Revoking..." : "Revoke"}
+                            </button>
+                            {ticket.status === "revoked" && (
+                              <span className="inline-revoked-confirm" style={{ fontSize: "0.8rem", color: "var(--danger, #dc2626)", fontWeight: 600 }}>
+                                Revoked
+                              </span>
+                            )}
+                          </div>
                         </td>
                       </tr>
                     ))}

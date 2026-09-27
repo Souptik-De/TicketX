@@ -1343,6 +1343,13 @@ dd {
   border-color: color-mix(in srgb, var(--warning) 40%, transparent);
 }
 
+.status-pill.revoked {
+  color: #ef4444;
+  background: rgba(239, 68, 68, 0.12);
+  border-color: color-mix(in srgb, #ef4444 40%, transparent);
+}
+
+
 .empty-inline {
   display: inline-flex;
   align-items: center;

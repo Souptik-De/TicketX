@@ -24,6 +24,7 @@ from .schemas import (
     TicketCreate,
     TicketCreated,
     TicketDetail,
+    RevokeTicketResponse,
     UserOut,
     VolunteerOut,
 )
@@ -35,6 +36,7 @@ from .services import (
     get_or_create_google_user,
     issue_ticket,
     record_scan,
+    revoke_ticket,
 )
 from .google_auth import verify_google_id_token
 
@@ -228,6 +230,21 @@ def get_ticket(
         event=ticket.event,
         attendee=ticket.attendee,
     )
+
+
+@app.post("/tickets/{ticket_id}/revoke", response_model=RevokeTicketResponse)
+def revoke_ticket_endpoint(
+    ticket_id: int,
+    _: User = Depends(require_roles("admin")),
+    db: Session = Depends(get_db),
+) -> RevokeTicketResponse:
+    ticket = revoke_ticket(db, ticket_id)
+    return RevokeTicketResponse(
+        ticket_id=ticket.id,
+        status=ticket.status,
+        revoked_at=ticket.revoked_at,
+    )
+
 
 
 @app.post("/scans", response_model=ScanResult)

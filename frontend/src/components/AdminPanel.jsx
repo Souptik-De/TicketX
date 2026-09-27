@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Armchair, CalendarPlus, DoorOpen, MapPin, Plus, UsersRound, Trash2 } from "lucide-react";
 
-import { createEvent, createGate, deleteEvent } from "../lib/api";
+import { createEvent, createGate, deleteEvent, revokeTicket } from "../lib/api";
 import { EventStats } from "./EventStats";
 
 export function AdminPanel({ events, gates, selectedEventId, onEventChange, onEventCreated, onGateCreated, onEventDeleted }) {
@@ -264,7 +264,7 @@ export function AdminPanel({ events, gates, selectedEventId, onEventChange, onEv
           </div>
         </div>
 
-        <EventStats eventId={selectedEvent?.id} />
+        <EventStats eventId={selectedEvent?.id} onRevokeTicket={revokeTicket} />
       </div>
     </section>
   );

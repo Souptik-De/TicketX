@@ -64,6 +64,8 @@ def migrate_existing_database() -> None:
             ticket_columns = {column["name"] for column in inspector.get_columns("tickets")}
             if "seat_number" not in ticket_columns:
                 connection.execute(text("ALTER TABLE tickets ADD COLUMN seat_number VARCHAR(24)"))
+            if "revoked_at" not in ticket_columns:
+                connection.execute(text("ALTER TABLE tickets ADD COLUMN revoked_at DATETIME"))
 
             rows = connection.execute(
                 text(

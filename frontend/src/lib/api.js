@@ -113,3 +113,10 @@ export function getGateStatus(eventId) {
 export function getEventStats(eventId) {
   return request(`/events/${eventId}/stats`);
 }
+
+export function revokeTicket(ticketId) {
+  return request(`/tickets/${ticketId}/revoke`, {
+    method: "POST",
+  });
+}
+
