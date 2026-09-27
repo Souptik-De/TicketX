@@ -20,6 +20,7 @@ from .schemas import (
     GoogleLoginRequest,
     LoginRequest,
     LoginResponse,
+    MyRegistrations,
     RegisterRequest,
     ScanCreate,
     ScanResult,
@@ -39,9 +40,10 @@ from .services import (
     create_gate,
     get_event_stats,
     get_gate_status,
+    get_my_registrations,
     get_or_create_google_user,
     issue_ticket,
-    join_waitlist,
+    leave_waitlist,
     record_scan,
     revoke_ticket,
 )
@@ -214,26 +216,23 @@ def add_gate(payload: GateCreate, _: User = Depends(require_roles("admin")), db:
     return create_gate(db, payload)
 
 
-@app.post("/tickets", response_model=TicketCreated | WaitlistJoinResponse, status_code=status.HTTP_201_CREATED)
+@app.post("/tickets", response_model=TicketIssuanceResponse, status_code=status.HTTP_201_CREATED)
 def create_ticket(
     payload: TicketCreate,
     response: Response,
-    _: User = Depends(require_roles("user")),
+    current_user: User = Depends(require_roles("user")),
     db: Session = Depends(get_db),
-) -> TicketCreated | WaitlistJoinResponse:
-    result = issue_ticket(db, payload)
+) -> TicketIssuanceResponse:
+    result = issue_ticket(db, payload, user_id=current_user.id)
     if isinstance(result, WaitlistEntry):
         return WaitlistJoinResponse(
             outcome="waitlisted",
             waitlisted=True,
             position=result.position,
             event_id=result.event_id,
+            waitlist_entry_id=result.id,
         )
-    if isinstance(result, WaitlistJoinResponse):
-        return result
-    response.headers["Location"] = f"/tickets/{result.id if hasattr(result, 'id') else result.ticket_id}"
-    if isinstance(result, TicketCreated):
-        return result
+    response.headers["Location"] = f"/tickets/{result.id}"
     return TicketCreated(
         outcome="ticketed",
         ticket_id=result.id,
@@ -297,6 +296,37 @@ def list_event_waitlist(
         .order_by(WaitlistEntry.position.asc())
         .all()
     )
+
+
+@app.get("/me/registrations", response_model=MyRegistrations)
+def my_registrations(
+    current_user: User = Depends(require_roles("user", "scanner", "admin")),
+    db: Session = Depends(get_db),
+) -> MyRegistrations:
+    """The caller's own waitlist places.
+
+    ET-07's in-app notice polls this: it is how a waitlisted attendee recovers
+    their position after a reload, and how they collect the ticket ET-11's
+    revocation issued them.
+    """
+    return get_my_registrations(db, current_user)
+
+
+@app.delete("/me/waitlist/{entry_id}", status_code=status.HTTP_204_NO_CONTENT)
+def withdraw_from_waitlist(
+    entry_id: int,
+    current_user: User = Depends(require_roles("user")),
+    db: Session = Depends(get_db),
+) -> Response:
+    entry = db.get(WaitlistEntry, entry_id)
+    if entry is None or entry.user_id != current_user.id:
+        # Do not distinguish "not yours" from "not there".
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Waitlist entry not found")
+    if entry.status != "waiting":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Waitlist entry is no longer active")
+
+    leave_waitlist(db, entry)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 

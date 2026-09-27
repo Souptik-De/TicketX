@@ -4,13 +4,15 @@
 // Canonical form: TX-<ticket_id>.<hex_hmac>  e.g. TX-12.ab12...
 
 const TX_PATTERN = /TX-\d+\.[0-9a-f]{64}/i;
+const TX_ANCHORED_PATTERN = /^TX-\d+\.[0-9a-f]{64}$/i;
 
 export function normalizeTxPayload(value) {
   return (value ?? "").trim();
 }
 
+/** True only for the canonical TX form, e.g. TX-12.<64 hex chars>. */
 export function isTxPayload(value) {
-  return TX_PATTERN.test(normalizeTxPayload(value)) && normalizeTxPayload(value).match(new RegExp(`^${TX_PATTERN.source}$`, "i")) !== null;
+  return TX_ANCHORED_PATTERN.test(normalizeTxPayload(value));
 }
 
 // Camera decoders sometimes return whitespace, newlines, URLs, or JSON

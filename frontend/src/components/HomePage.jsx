@@ -123,7 +123,7 @@ export function HomePage({ events, isLoading, error, sessionUser, theme, onTheme
                     <span>{eventMonth(event.date_time)}</span>
                   </time>
                   <span className={`availability-tag${soldOut ? " sold-out" : ""}`}>
-                    {soldOut ? "Sold out" : `${remaining} seats left`}
+                    {soldOut ? "Sold out - waitlist open" : `${remaining} seats left`}
                   </span>
                 </div>
 
@@ -149,9 +149,9 @@ export function HomePage({ events, isLoading, error, sessionUser, theme, onTheme
                       return <span key={tier}><strong>{count}</strong> {tier}</span>;
                     })}
                   </div>
-                  <button className="primary-button" type="button" disabled={soldOut} onClick={() => onGetTicket(event.id)}>
+                  <button className={`primary-button${soldOut ? " waitlist-button" : ""}`} type="button" onClick={() => onGetTicket(event.id)}>
                     <Ticket size={18} aria-hidden="true" />
-                    {soldOut ? "Unavailable" : "Get ticket"}
+                    {soldOut ? "Join waitlist" : "Get ticket"}
                   </button>
                 </div>
               </article>

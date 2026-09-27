@@ -14,7 +14,7 @@ export function TicketIssuer({ events, initialEventId, onTicketIssued }) {
   const [waitlistMessage, setWaitlistMessage] = useState("");
 
   const selectedEvent = events.find((event) => event.id === Number(eventId)) ?? events[0];
-  const remainingSeats = selectedEvent ? selectedEvent.capacity - selectedEvent.issued_count : 0;
+  const remainingSeats = selectedEvent ? Math.max(selectedEvent.capacity - selectedEvent.issued_count, 0) : 0;
 
   useEffect(() => {
     if (initialEventId) {
@@ -29,15 +29,28 @@ export function TicketIssuer({ events, initialEventId, onTicketIssued }) {
       return;
     }
 
+    const trimmedName = name.trim();
+    const trimmedEmail = email.trim().toLowerCase();
+    const trimmedCampusId = campusId.trim();
+
     setError("");
     setWaitlistMessage("");
+    if (trimmedName.length < 2) {
+      setError("Enter the attendee's full name.");
+      return;
+    }
+    if (!trimmedEmail) {
+      setError("Enter a valid email address.");
+      return;
+    }
+
     setIsSubmitting(true);
     try {
       const response = await issueTicket({
         event_id: selectedEvent.id,
-        attendee_name: name,
-        attendee_contact: email,
-        campus_id: campusId,
+        attendee_name: trimmedName,
+        attendee_contact: trimmedEmail,
+        campus_id: trimmedCampusId || undefined,
         tier,
       });
 
@@ -50,7 +63,7 @@ export function TicketIssuer({ events, initialEventId, onTicketIssued }) {
           position: response.position,
           event_id: response.event_id,
           event: selectedEvent,
-          attendee: { name, contact_email: email, campus_id: campusId },
+          attendee: { name: trimmedName, contact_email: trimmedEmail, campus_id: trimmedCampusId },
         });
       } else {
         setWaitlistMessage("");
@@ -98,6 +111,9 @@ export function TicketIssuer({ events, initialEventId, onTicketIssued }) {
               <span><Armchair size={18} aria-hidden="true" /> {selectedEvent.issued_count} issued</span>
               <strong>{remainingSeats} remaining</strong>
             </div>
+            {selectedEvent.revoked_count > 0 && (
+              <p className="muted-text">{selectedEvent.revoked_count} revoked, seats released</p>
+            )}
             <div className="tier-counts">
               {["general", "premium", "vip"].map((tierName) => {
                 const count = selectedEvent.tier_counts?.find((item) => item.tier === tierName)?.issued_count ?? 0;

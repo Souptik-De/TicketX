@@ -8,23 +8,73 @@ from sqlalchemy.orm import Session, joinedload
 
 from .models import Attendee, Event, Gate, Scan, Ticket, User, Volunteer, WaitlistEntry
 from .schemas import (
+    AttendeeOut,
+    EventOut,
     EventStatsGate,
     EventStatsOut,
     EventStatsTicket,
     EventStatsTier,
     GateCreate,
     GateStatus,
+    MyRegistrations,
+    MyWaitlistEntry,
     PriorScan,
     PromotedAttendeeInfo,
     ScanCreate,
     ScanResult,
     TicketCreate,
+    TicketDetail,
     WaitlistEntryOut,
 )
 from .security import sign_ticket, ticket_id_from_signature
 
 
 TIER_PREFIXES = {"general": "GEN", "premium": "PRE", "vip": "VIP"}
+
+
+def _get_or_create_attendee(
+    db: Session,
+    attendee_name: str,
+    attendee_contact: str,
+    campus_id: str | None,
+) -> Attendee:
+    """Resolve the Attendee identity for a person.
+
+    ``campus_id`` is the natural key and is globally unique, so it is reused
+    across events. When it is missing the contact email stands in, which is how
+    an anonymous registration stays distinguishable from someone else.
+    """
+    contact = str(attendee_contact).strip().lower()
+    identity = campus_id.strip() if campus_id else contact
+    attendee = db.query(Attendee).filter(Attendee.campus_id == identity).one_or_none()
+    if attendee is None:
+        attendee = Attendee(
+            name=attendee_name.strip(),
+            campus_id=identity,
+            contact_email=contact,
+        )
+        db.add(attendee)
+        db.flush()
+    return attendee
+
+
+def _next_seat_number(db: Session, event_id: int, tier: str) -> str:
+    """Allocate a seat code that is never reused.
+
+    Revocation frees capacity, not seat numbers, so this walks past the highest
+    code already handed out for the tier rather than counting live tickets --
+    counting would collide with a code an existing ticket still holds.
+    """
+    highest = 0
+    existing = db.query(Ticket).filter(Ticket.event_id == event_id, Ticket.tier == tier).all()
+    for ticket in existing:
+        if not ticket.seat_number or "-" not in ticket.seat_number:
+            continue
+        try:
+            highest = max(highest, int(ticket.seat_number.rsplit("-", 1)[1]))
+        except ValueError:
+            continue
+    return f"{TIER_PREFIXES[tier]}-{highest + 1:03d}"
 
 
 def join_waitlist(
@@ -34,7 +84,29 @@ def join_waitlist(
     attendee_contact: str,
     campus_id: str | None,
     tier: str,
+    user_id: int | None = None,
 ) -> WaitlistEntry:
+    """Place a person on the queue, or return the entry they already hold.
+
+    Idempotent per (event, attendee): without this a retry, a double click, or
+    one person submitting twice would occupy several positions and then be
+    promoted several times, each time taking a seat from the person genuinely
+    next in line.
+    """
+    attendee = _get_or_create_attendee(db, attendee_name, attendee_contact, campus_id)
+
+    existing = (
+        db.query(WaitlistEntry)
+        .filter(
+            WaitlistEntry.event_id == event_id,
+            WaitlistEntry.attendee_id == attendee.id,
+            WaitlistEntry.status == "waiting",
+        )
+        .one_or_none()
+    )
+    if existing is not None:
+        return existing
+
     position = (
         db.query(WaitlistEntry)
         .filter(WaitlistEntry.event_id == event_id, WaitlistEntry.status == "waiting")
@@ -42,6 +114,8 @@ def join_waitlist(
     ) + 1
     entry = WaitlistEntry(
         event_id=event_id,
+        attendee_id=attendee.id,
+        user_id=user_id,
         attendee_name=attendee_name.strip(),
         attendee_contact=str(attendee_contact).strip().lower(),
         campus_id=campus_id.strip() if campus_id else None,
@@ -55,6 +129,28 @@ def join_waitlist(
     return entry
 
 
+def leave_waitlist(db: Session, entry: WaitlistEntry) -> None:
+    """Withdraw a waiting entry and close the gap it leaves in the queue."""
+    old_position = entry.position
+    entry.status = "cancelled"
+    entry.resolved_at = datetime.now(UTC).replace(tzinfo=None)
+    db.flush()
+
+    later = (
+        db.query(WaitlistEntry)
+        .filter(
+            WaitlistEntry.event_id == entry.event_id,
+            WaitlistEntry.status == "waiting",
+            WaitlistEntry.position > old_position,
+        )
+        .order_by(WaitlistEntry.position.asc())
+        .all()
+    )
+    for later_entry in later:
+        later_entry.position -= 1
+    db.commit()
+
+
 def _issue_ticket_record(
     db: Session,
     event_id: int,
@@ -62,24 +158,16 @@ def _issue_ticket_record(
     attendee_contact: str,
     campus_id: str | None,
     tier: str,
+    attendee: Attendee | None = None,
 ) -> Ticket:
     tier = tier.strip().lower()
     if tier not in TIER_PREFIXES:
         tier = "general"
 
-    tier_issued_count = db.query(Ticket).filter(Ticket.event_id == event_id, Ticket.tier == tier).count()
-    seat_number = f"{TIER_PREFIXES[tier]}-{tier_issued_count + 1:03d}"
+    seat_number = _next_seat_number(db, event_id, tier)
 
-    clean_campus_id = campus_id.strip() if campus_id else str(attendee_contact).lower()
-    attendee = db.query(Attendee).filter(Attendee.campus_id == clean_campus_id).one_or_none()
     if attendee is None:
-        attendee = Attendee(
-            name=attendee_name.strip(),
-            campus_id=clean_campus_id,
-            contact_email=str(attendee_contact).lower(),
-        )
-        db.add(attendee)
-        db.flush()
+        attendee = _get_or_create_attendee(db, attendee_name, attendee_contact, campus_id)
 
     ticket = Ticket(
         event_id=event_id,
@@ -94,7 +182,68 @@ def _issue_ticket_record(
     return ticket
 
 
-def issue_ticket(db: Session, payload: TicketCreate) -> Ticket | WaitlistEntry:
+def promote_next_waitlisted(db: Session, event_id: int) -> PromotedAttendeeInfo | None:
+    """Hand one freed seat to the person at the head of the queue.
+
+    ET-07 / ET-11 contract for any path that frees a seat:
+
+    * Call this exactly ONCE per seat freed. It does not re-check capacity,
+      because the caller has already decided a seat is free.
+    * Call it inside the same transaction as the change that freed the seat, and
+      let the caller own the commit. On failure the caller's rollback undoes
+      both the revocation and the promotion together.
+    * A bulk revocation must therefore loop rather than call this once.
+
+    Returns ``None`` when nobody is waiting.
+    """
+    entry = (
+        db.query(WaitlistEntry)
+        .filter(WaitlistEntry.event_id == event_id, WaitlistEntry.status == "waiting")
+        .order_by(WaitlistEntry.position.asc())
+        .first()
+    )
+    if entry is None:
+        return None
+
+    old_position = entry.position
+    new_ticket = _issue_ticket_record(
+        db=db,
+        event_id=event_id,
+        attendee_name=entry.attendee_name,
+        attendee_contact=entry.attendee_contact,
+        campus_id=entry.campus_id,
+        tier=entry.tier,
+        attendee=entry.attendee,
+    )
+
+    entry.status = "promoted"
+    entry.promoted_ticket_id = new_ticket.id
+    entry.resolved_at = datetime.now(UTC).replace(tzinfo=None)
+    db.flush()
+
+    # Close the gap so positions stay contiguous 1..n over the waiting rows.
+    later = (
+        db.query(WaitlistEntry)
+        .filter(
+            WaitlistEntry.event_id == event_id,
+            WaitlistEntry.status == "waiting",
+            WaitlistEntry.position > old_position,
+        )
+        .order_by(WaitlistEntry.position.asc())
+        .all()
+    )
+    for later_entry in later:
+        later_entry.position -= 1
+    db.flush()
+
+    return PromotedAttendeeInfo(
+        attendee_name=entry.attendee_name,
+        new_ticket_id=new_ticket.id,
+        tier=new_ticket.tier,
+    )
+
+
+def issue_ticket(db: Session, payload: TicketCreate, user_id: int | None = None) -> Ticket | WaitlistEntry:
     event = db.get(Event, payload.event_id)
     if event is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
@@ -112,6 +261,7 @@ def issue_ticket(db: Session, payload: TicketCreate) -> Ticket | WaitlistEntry:
             attendee_contact=str(payload.attendee_contact),
             campus_id=payload.campus_id,
             tier=tier,
+            user_id=user_id,
         )
 
     ticket = _issue_ticket_record(
@@ -127,6 +277,63 @@ def issue_ticket(db: Session, payload: TicketCreate) -> Ticket | WaitlistEntry:
     return ticket
 
 
+def get_my_registrations(db: Session, user: User) -> MyRegistrations:
+    """The caller's own queue places, newest first.
+
+    This is the read side of ET-07's in-app notice: the frontend polls it to
+    show a live position and to surface a ticket that ET-11's revocation
+    handed them. Issued tickets are not listed here because issuance records no
+    owning user -- the attendee, not the submitting account, is the subject.
+    """
+    entries = (
+        db.query(WaitlistEntry)
+        .filter(WaitlistEntry.user_id == user.id)
+        .order_by(WaitlistEntry.created_at.desc(), WaitlistEntry.id.desc())
+        .all()
+    )
+
+    rows: list[MyWaitlistEntry] = []
+    for entry in entries:
+        promoted: TicketDetail | None = None
+        if entry.promoted_ticket_id is not None:
+            ticket = (
+                db.query(Ticket)
+                .options(joinedload(Ticket.event), joinedload(Ticket.attendee))
+                .filter(Ticket.id == entry.promoted_ticket_id)
+                .one_or_none()
+            )
+            if ticket is not None:
+                promoted = TicketDetail(
+                    ticket_id=ticket.id,
+                    qr_signature=ticket.qr_signature or "",
+                    tier=ticket.tier,
+                    seat_number=ticket.seat_number or "",
+                    status=ticket.status,
+                    event=EventOut.model_validate(ticket.event),
+                    attendee=AttendeeOut.model_validate(ticket.attendee),
+                )
+
+        rows.append(
+            MyWaitlistEntry(
+                waitlist_entry_id=entry.id,
+                event_id=entry.event_id,
+                event_title=entry.event.title,
+                event_venue=entry.event.venue,
+                event_date_time=entry.event.date_time,
+                attendee_name=entry.attendee_name,
+                attendee_contact=entry.attendee_contact,
+                campus_id=entry.campus_id or "",
+                tier=entry.tier,
+                position=entry.position if entry.status == "waiting" else None,
+                status=entry.status,
+                created_at=entry.created_at,
+                promoted_ticket=promoted,
+            )
+        )
+
+    return MyRegistrations(waitlist=rows)
+
+
 def revoke_ticket(db: Session, ticket_id: int) -> Ticket:
     ticket = db.get(Ticket, ticket_id)
     if ticket is None:
@@ -140,49 +347,9 @@ def revoke_ticket(db: Session, ticket_id: int) -> Ticket:
         ticket.revoked_at = datetime.now(UTC).replace(tzinfo=None)
         db.flush()
 
-        event_id = ticket.event_id
-        waitlist_entry = (
-            db.query(WaitlistEntry)
-            .filter(WaitlistEntry.event_id == event_id, WaitlistEntry.status == "waiting")
-            .order_by(WaitlistEntry.position.asc())
-            .first()
-        )
-
-        promoted_info: PromotedAttendeeInfo | None = None
-        if waitlist_entry is not None:
-            old_position = waitlist_entry.position
-
-            new_ticket = _issue_ticket_record(
-                db=db,
-                event_id=event_id,
-                attendee_name=waitlist_entry.attendee_name,
-                attendee_contact=waitlist_entry.attendee_contact,
-                campus_id=waitlist_entry.campus_id,
-                tier=waitlist_entry.tier,
-            )
-
-            waitlist_entry.status = "promoted"
-            db.flush()
-
-            remaining_waiting = (
-                db.query(WaitlistEntry)
-                .filter(
-                    WaitlistEntry.event_id == event_id,
-                    WaitlistEntry.status == "waiting",
-                    WaitlistEntry.position > old_position,
-                )
-                .order_by(WaitlistEntry.position.asc())
-                .all()
-            )
-            for entry in remaining_waiting:
-                entry.position -= 1
-            db.flush()
-
-            promoted_info = PromotedAttendeeInfo(
-                attendee_name=waitlist_entry.attendee_name,
-                new_ticket_id=new_ticket.id,
-                tier=new_ticket.tier,
-            )
+        # One seat freed, so exactly one promotion. See promote_next_waitlist's
+        # contract for other callers.
+        promoted_info = promote_next_waitlisted(db=db, event_id=ticket.event_id)
 
         db.commit()
         db.refresh(ticket)
@@ -443,6 +610,32 @@ def get_event_stats(db: Session, event_id: int) -> EventStatsOut:
         for entry in waitlist_entries
     ]
 
+    # Recently promoted, so an admin revoking a seat can confirm the next person
+    # in line actually received it rather than the seat silently vanishing.
+    promoted_entries = (
+        db.query(WaitlistEntry)
+        .filter(WaitlistEntry.event_id == event_id, WaitlistEntry.status == "promoted")
+        .order_by(WaitlistEntry.resolved_at.desc(), WaitlistEntry.id.desc())
+        .limit(5)
+        .all()
+    )
+    promoted_rows = [
+        WaitlistEntryOut(
+            id=entry.id,
+            event_id=entry.event_id,
+            attendee_name=entry.attendee_name,
+            attendee_contact=entry.attendee_contact,
+            campus_id=entry.campus_id,
+            tier=entry.tier,
+            position=entry.position,
+            status=entry.status,
+            created_at=entry.created_at,
+            promoted_ticket_id=entry.promoted_ticket_id,
+            resolved_at=entry.resolved_at,
+        )
+        for entry in promoted_entries
+    ]
+
     return EventStatsOut(
         event_id=event.id,
         title=event.title,
@@ -457,6 +650,7 @@ def get_event_stats(db: Session, event_id: int) -> EventStatsOut:
         gate_breakdown=gate_breakdown,
         tickets=ticket_rows,
         waitlist=waitlist_rows,
+        promoted=promoted_rows,
     )
 
 

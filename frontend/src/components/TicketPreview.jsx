@@ -1,8 +1,8 @@
 import { useRef, useState } from "react";
-import { Check, Clock, Copy, Download, TicketCheck } from "lucide-react";
+import { Check, Clock, Copy, Download, Printer, Share2, TicketCheck } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 
-import { normalizeTxPayload } from "../lib/ticketQr";
+import { isTxPayload, normalizeTxPayload } from "../lib/ticketQr";
 
 function safeFileName(value) {
   return value
@@ -40,29 +40,85 @@ export function TicketPreview({ ticket }) {
   const qrRef = useRef(null);
   const [downloadError, setDownloadError] = useState("");
   const [copyState, setCopyState] = useState("idle");
+  const [summaryState, setSummaryState] = useState("idle");
+  const [shareState, setShareState] = useState("idle");
 
   const txPayload = normalizeTxPayload(ticket?.qr_signature);
+  const txValid = isTxPayload(txPayload);
 
-  async function handleCopyTx() {
-    if (!txPayload) return;
+  async function copyText(value) {
     try {
-      await navigator.clipboard.writeText(txPayload);
-      setCopyState("copied");
+      await navigator.clipboard.writeText(value);
+      return true;
     } catch {
       try {
         const area = document.createElement("textarea");
-        area.value = txPayload;
+        area.value = value;
         document.body.appendChild(area);
         area.select();
         document.execCommand("copy");
         area.remove();
-        setCopyState("copied");
+        return true;
       } catch {
-        setCopyState("failed");
+        return false;
       }
-    } finally {
-      window.setTimeout(() => setCopyState("idle"), 1600);
     }
+  }
+
+  function flash(setter, value) {
+    setter(value);
+    window.setTimeout(() => setter("idle"), 1600);
+  }
+
+  async function handleCopyTx() {
+    if (!txPayload) return;
+    flash(setCopyState, (await copyText(txPayload)) ? "copied" : "failed");
+  }
+
+  function buildGateSummary() {
+    const eventDate = new Date(ticket.event.date_time).toLocaleString("en-IN", {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+    return [
+      `TicketX pass: ${ticket.event.title}`,
+      `Attendee: ${ticket.attendee.name}`,
+      `Date: ${eventDate}`,
+      `Venue: ${ticket.event.venue}`,
+      `Tier: ${ticket.tier.toUpperCase()} / Seat: ${ticket.seat_number}`,
+      `Ticket #${ticket.ticket_id} / Status: ${ticket.status}`,
+      `TX: ${txPayload}`,
+    ].join("\n");
+  }
+
+  async function handleCopySummary() {
+    flash(setSummaryState, (await copyText(buildGateSummary())) ? "copied" : "failed");
+  }
+
+  async function handleShare() {
+    if (!txValid) return;
+    const shareData = {
+      title: `TicketX pass: ${ticket.event.title}`,
+      text: buildGateSummary(),
+    };
+    if (typeof navigator.share === "function") {
+      try {
+        await navigator.share(shareData);
+        flash(setShareState, "shared");
+      } catch (err) {
+        if (err instanceof Error && err.name === "AbortError") return;
+        flash(setShareState, (await copyText(shareData.text)) ? "copied" : "failed");
+      }
+      return;
+    }
+    flash(setShareState, (await copyText(shareData.text)) ? "copied" : "failed");
+  }
+
+  function handlePrint() {
+    window.print();
   }
 
   if (!ticket) {
@@ -89,7 +145,8 @@ export function TicketPreview({ ticket }) {
             This event is full. You've been added to the waitlist at position #{ticket.position}.
           </p>
           <p className="muted-text">
-            No QR code or seat is assigned while waitlisted. We'll notify you if a ticket becomes available.
+            No QR code or seat is assigned while you wait. If a seat opens up it goes to the
+            person at the front of the line, and your ticket appears in your waitlist panel.
           </p>
         </div>
       </section>
@@ -203,7 +260,7 @@ export function TicketPreview({ ticket }) {
   }
 
   return (
-    <section className="panel ticket-preview">
+    <section className="panel ticket-preview ticket-print-area">
       <div className="ticket-copy">
         <p className="eyebrow">My Ticket</p>
         <h2>{ticket.event.title}</h2>
@@ -228,25 +285,63 @@ export function TicketPreview({ ticket }) {
         </dl>
       </div>
       <div className="qr-wrap" ref={qrRef} aria-label="Ticket QR code">
-        <QRCodeSVG value={txPayload} size={180} level="M" includeMargin />
+        {txValid ? (
+          <QRCodeSVG value={txPayload} size={180} level="M" includeMargin />
+        ) : (
+          <p className="error-text" role="alert">
+            TX missing — please re-issue this ticket.
+          </p>
+        )}
         <span>Ticket #{ticket.ticket_id}</span>
         <strong>{ticket.seat_number}</strong>
       </div>
       <div className="tx-copy-row">
-        <code className="tx-payload" title={txPayload}>
-          {txPayload}
+        <code className="tx-payload" title={txPayload || "No TX payload"}>
+          {txPayload || "No TX payload"}
         </code>
-        <button className="ghost-button tx-copy-button" type="button" onClick={handleCopyTx} aria-label="Copy ticket TX payload">
+        <button
+          className="ghost-button tx-copy-button"
+          type="button"
+          onClick={handleCopyTx}
+          disabled={!txPayload}
+          aria-label="Copy ticket TX payload"
+        >
           {copyState === "copied" ? <Check size={16} aria-hidden="true" /> : <Copy size={16} aria-hidden="true" />}
           {copyState === "copied" ? "Copied" : copyState === "failed" ? "Copy failed" : "Copy TX"}
         </button>
       </div>
+      {!txValid && (
+        <p className="error-text tx-hint" role="alert">
+          This ticket has no valid TX payload. Re-issue it before heading to the gate.
+        </p>
+      )}
       <p className="muted-text tx-hint">Scan this QR or paste the TX above at the gate. Both use the same TX.</p>
+      <div className="gate-summary">
+        <div className="section-heading">
+          <p className="eyebrow">Gate Summary</p>
+          <h3>Show this if the camera fails</h3>
+        </div>
+        <pre className="gate-summary-text">{buildGateSummary()}</pre>
+        <button className="ghost-button" type="button" onClick={handleCopySummary} aria-label="Copy gate summary">
+          {summaryState === "copied" ? <Check size={16} aria-hidden="true" /> : <Copy size={16} aria-hidden="true" />}
+          {summaryState === "copied" ? "Summary copied" : summaryState === "failed" ? "Copy failed" : "Copy summary"}
+        </button>
+      </div>
       {downloadError && <p className="error-text ticket-download-error">{downloadError}</p>}
-      <button className="ghost-button" type="button" onClick={handleDownload}>
-        <Download size={18} aria-hidden="true" />
-        Download ticket
-      </button>
+      <div className="ticket-actions">
+        <button className="ghost-button" type="button" onClick={handleDownload} disabled={!txValid}>
+          <Download size={18} aria-hidden="true" />
+          Download ticket
+        </button>
+        <button className="ghost-button" type="button" onClick={handlePrint}>
+          <Printer size={18} aria-hidden="true" />
+          Print
+        </button>
+        <button className="ghost-button" type="button" onClick={handleShare} disabled={!txValid}>
+          <Share2 size={18} aria-hidden="true" />
+          {shareState === "shared" ? "Shared" : shareState === "copied" ? "Copied" : shareState === "failed" ? "Share failed" : "Share"}
+        </button>
+      </div>
     </section>
   );
 }

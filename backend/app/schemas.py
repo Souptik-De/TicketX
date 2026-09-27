@@ -51,6 +51,7 @@ class EventOut(BaseModel):
     venue: str
     capacity: int
     issued_count: int
+    revoked_count: int
     tier_counts: list[TierCount]
 
 
@@ -97,6 +98,7 @@ class WaitlistJoinResponse(BaseModel):
     waitlisted: bool = True
     position: int
     event_id: int
+    waitlist_entry_id: int
 
 
 TicketIssuanceResponse = TicketCreated | WaitlistJoinResponse
@@ -127,6 +129,34 @@ class RevokeTicketResponse(BaseModel):
     status: str
     revoked_at: datetime | None = None
     promoted_attendee: PromotedAttendeeInfo | None = None
+
+
+class MyWaitlistEntry(BaseModel):
+    """One of the caller's own queue places, as shown to the attendee.
+
+    ``position`` is the live queue position while waiting and ``None`` once the
+    entry has been promoted or withdrawn. ``promoted_ticket`` is what lets the
+    promoted attendee reach the ticket ET-11 issued them without a second guess
+    at an identifier.
+    """
+
+    waitlist_entry_id: int
+    event_id: int
+    event_title: str
+    event_venue: str
+    event_date_time: datetime
+    attendee_name: str
+    attendee_contact: str
+    campus_id: str
+    tier: str
+    position: int | None
+    status: str
+    created_at: datetime
+    promoted_ticket: TicketDetail | None = None
+
+
+class MyRegistrations(BaseModel):
+    waitlist: list[MyWaitlistEntry] = []
 
 
 
@@ -228,6 +258,10 @@ class WaitlistEntryOut(BaseModel):
     position: int
     status: str
     created_at: datetime | None = None
+    # Set once ET-11's revocation has issued this person's ticket, so an admin
+    # can see that a seat really went to the waitlist and not into the void.
+    promoted_ticket_id: int | None = None
+    resolved_at: datetime | None = None
 
 
 class EventStatsOut(BaseModel):
@@ -244,4 +278,5 @@ class EventStatsOut(BaseModel):
     gate_breakdown: list[EventStatsGate]
     tickets: list[EventStatsTicket]
     waitlist: list[WaitlistEntryOut] = []
+    promoted: list[WaitlistEntryOut] = []
 

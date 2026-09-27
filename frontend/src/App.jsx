@@ -1,11 +1,12 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { CalendarDays, Home, LogOut, Moon, RadioTower, ScanLine, ShieldCheck, Sun, UserRound } from "lucide-react";
 
-import { getEvents, getGateStatus, getVolunteers, setAuthToken } from "./lib/api";
+import { getEvents, getGateStatus, getMyRegistrations, getVolunteers, leaveWaitlist, setAuthToken } from "./lib/api";
 import { AdminPanel } from "./components/AdminPanel";
 import { GateStatus } from "./components/GateStatus";
 import { HomePage } from "./components/HomePage";
 import { LoginPanel } from "./components/LoginPanel";
+import { MyWaitlist } from "./components/MyWaitlist";
 import { OperationsSummary } from "./components/OperationsSummary";
 import { ScannerPanel } from "./components/ScannerPanel";
 import { ScanResultCard } from "./components/ScanResultCard";
@@ -18,6 +19,10 @@ const workspaces = {
   admin: { id: "admin", label: "Admin workspace", icon: ShieldCheck },
   scanner: { id: "gate", label: "Scanner workspace", icon: ScanLine },
 };
+
+// How often to ask the server whether a seat has opened up. ET-07's in-app
+// notice depends on this, since there is no push channel.
+const WAITLIST_POLL_MS = 15000;
 
 function getStoredUser() {
   try {
@@ -43,6 +48,7 @@ function App() {
   const [ticket, setTicket] = useState(null);
   const [scanResult, setScanResult] = useState(null);
   const [loadError, setLoadError] = useState("");
+  const [myRegistrations, setMyRegistrations] = useState([]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -137,9 +143,60 @@ function App() {
     setView("workspace");
   }
 
+  // ET-07: poll the caller's own queue places. This is what makes a position
+  // survive a reload, and what surfaces a promotion once ET-11's revocation has
+  // issued the ticket.
+  const refreshMyRegistrations = useCallback(async () => {
+    if (!sessionUser) {
+      return;
+    }
+    try {
+      const data = await getMyRegistrations();
+      setMyRegistrations(data?.waitlist ?? []);
+    } catch {
+      // A transient failure should not blank out a position the user can see.
+    }
+  }, [sessionUser]);
+
+  useEffect(() => {
+    if (!sessionUser) {
+      setMyRegistrations([]);
+      return undefined;
+    }
+
+    let isActive = true;
+    const load = () => {
+      getMyRegistrations()
+        .then((data) => {
+          if (isActive) {
+            setMyRegistrations(data?.waitlist ?? []);
+          }
+        })
+        .catch(() => undefined);
+    };
+
+    load();
+    const timer = setInterval(load, WAITLIST_POLL_MS);
+
+    return () => {
+      isActive = false;
+      clearInterval(timer);
+    };
+  }, [sessionUser]);
+
+  async function handleLeaveWaitlist(entryId) {
+    await leaveWaitlist(entryId);
+    await refreshMyRegistrations();
+  }
+
+  function handleShowTicket(promotedTicket) {
+    setTicket(promotedTicket);
+  }
+
   function handleTicketIssued(issuedTicket) {
     setTicket(issuedTicket);
     getEvents().then(setEvents).catch(() => undefined);
+    refreshMyRegistrations();
   }
 
   function clearSession() {
@@ -151,6 +208,7 @@ function App() {
     setVolunteers([]);
     setGateStatus([]);
     setAllGateStatus([]);
+    setMyRegistrations([]);
   }
 
   function handleLogout() {
@@ -251,6 +309,11 @@ function App() {
         <section className="workspace-grid user-grid">
           <div className="left-stack">
             <TicketIssuer events={events} initialEventId={selectedEventId} onTicketIssued={handleTicketIssued} />
+            <MyWaitlist
+              entries={myRegistrations}
+              onShowTicket={handleShowTicket}
+              onLeave={handleLeaveWaitlist}
+            />
           </div>
           <div className="right-stack">
             <TicketPreview ticket={ticket} />

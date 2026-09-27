@@ -21,6 +21,7 @@
   --success-soft: #ecf9f3;
   --warning: #b56b09;
   --warning-soft: #fff7e8;
+  --warning-strong: #8a4f05;
   --shadow: 0 24px 70px rgba(23, 33, 29, 0.12);
 }
 
@@ -43,6 +44,9 @@
   --success-soft: #173126;
   --warning: #ffc56d;
   --warning-soft: #332716;
+  /* Dark-theme --warning is a light amber, so a button gradient built from it
+     needs its own dark anchor to keep white label text legible. */
+  --warning-strong: #8a4f05;
   --shadow: 0 28px 80px rgba(0, 0, 0, 0.35);
 }
 
@@ -839,6 +843,12 @@ textarea {
   opacity: 0.55;
 }
 
+/* Sold out is not a dead end: this button leads to the waitlist. */
+.primary-button.waitlist-button {
+  background: linear-gradient(135deg, var(--warning), var(--warning-strong));
+  color: #ffffff;
+}
+
 .ghost-button,
 .icon-button {
   background: var(--surface-soft);
@@ -1017,6 +1027,168 @@ dd {
   font-weight: 800;
   color: var(--text);
   margin: 0;
+}
+
+/* ET-07: the attendee's own queue places and the promotion notice. */
+.promotion-alert {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 16px;
+  border-radius: 8px;
+  border: 1px solid var(--success);
+  background: var(--success-soft);
+  color: var(--text);
+  margin-bottom: 16px;
+}
+
+.promotion-alert > svg {
+  color: var(--success);
+  flex-shrink: 0;
+}
+
+.promotion-alert strong {
+  color: var(--success);
+}
+
+.promotion-alert p {
+  margin: 6px 0 12px;
+  font-size: 0.95rem;
+}
+
+.promotion-alert .primary-button {
+  grid-column: auto;
+  align-self: flex-start;
+}
+
+.waitlist-entries {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 12px;
+}
+
+.waitlist-entry {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 14px 16px;
+  border-radius: 8px;
+  border: 1px dashed var(--warning);
+  background: var(--warning-soft);
+}
+
+.waitlist-entry-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 800;
+  color: var(--text);
+  margin: 0 0 4px;
+}
+
+.waitlist-entry-title svg {
+  color: var(--warning);
+  flex-shrink: 0;
+}
+
+.waitlist-position {
+  margin: 0 0 4px;
+  font-size: 0.95rem;
+  color: var(--text);
+}
+
+.waitlist-position strong {
+  font-size: 1.15rem;
+  color: var(--warning);
+}
+
+.waitlist-entry .ghost-button {
+  grid-column: auto;
+  flex: 0 0 auto;
+}
+
+.waitlist-queue-note {
+  margin: 12px 0 0;
+  font-size: 0.85rem;
+}
+
+/* Admin: confirmation that a freed seat reached the waitlist. */
+.promoted-block {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.promoted-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.promoted-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 0.9rem;
+}
+
+.ticket-preview .ticket-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  grid-column: 1 / -1;
+}
+
+.ticket-preview .ticket-actions .ghost-button {
+  grid-column: auto;
+  flex: 1 1 140px;
+}
+
+.gate-summary {
+  display: grid;
+  gap: 8px;
+  grid-column: 1 / -1;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  background: var(--surface-soft);
+}
+
+.gate-summary-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 0;
+}
+
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  .ticket-print-area,
+  .ticket-print-area * {
+    visibility: visible;
+  }
+  .ticket-print-area {
+    position: absolute;
+    inset: 0 auto auto 0;
+    width: 100%;
+    box-shadow: none;
+  }
+  .ticket-print-area .tx-copy-row button,
+  .ticket-print-area .gate-summary button,
+  .ticket-print-area .ticket-actions {
+    display: none;
+  }
 }
 
 .scan-result {
