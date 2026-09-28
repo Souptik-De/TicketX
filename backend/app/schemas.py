@@ -160,7 +160,7 @@ class MyWaitlistEntry(BaseModel):
 
 
 class MyRegistrations(BaseModel):
-    """Everything the caller holds for themselves, in one place.
+    """Everything the caller holds, both halves of it.
 
     The user workspace polls this, so ``waitlist`` and ``tickets`` arrive
     together: the first drives the live queue position and the promotion notice,
@@ -169,6 +169,38 @@ class MyRegistrations(BaseModel):
 
     waitlist: list[MyWaitlistEntry] = []
     tickets: list[TicketDetail] = []
+
+
+class EventSuggestion(BaseModel):
+    """One recommended event, with the reason it was chosen.
+
+    The event is a full ``EventOut`` so the UI can render the same card the
+    catalog uses. ``source`` says whether ``reason`` came from the model or from
+    the deterministic rules, which is useful when a model call fails and the
+    wording visibly changes.
+    """
+
+    event: EventOut
+    reason: str
+    source: Literal["ai", "rule"] = "rule"
+    signal: str
+    score: float
+
+
+class EventSuggestionOut(BaseModel):
+    """The "Recommended for you" row.
+
+    ``cold_start`` is true when the caller has no registration history, so the
+    copy is crowd-based rather than personal. ``ai_enabled`` is false when no
+    API key is configured, in which case every reason is rule-based and the row
+    is still fully populated.
+    """
+
+    items: list[EventSuggestion] = []
+    cold_start: bool = True
+    ai_enabled: bool = False
+    generated_at: datetime | None = None
+
 
 
 

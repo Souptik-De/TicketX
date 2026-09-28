@@ -133,6 +133,17 @@ export function leaveWaitlist(entryId) {
   });
 }
 
+/**
+ * Events recommended to the signed-in attendee, with a one-line reason each.
+ *
+ * The ranking is computed server-side without a model, so this is safe to call on
+ * every visit to the browse view: a cold cache returns rule-based copy
+ * immediately and never waits on the model.
+ */
+export function getEventSuggestions() {
+  return request("/me/event-suggestions");
+}
+
 export async function exportAttendanceCsv(eventId) {
   const authHeaders = authToken ? { Authorization: `Bearer ${authToken}` } : {};
   const response = await fetch(`${API_BASE}/events/${eventId}/export`, {
