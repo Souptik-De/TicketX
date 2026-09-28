@@ -51,6 +51,9 @@ This runs the FastAPI contract tests and verifies that the React app builds.
 - Separate authenticated workspaces for attendees, admins, and ticket scanners.
 - Password login plus optional Google login for users and scanners.
 - Public event homepage with descriptions, dates, venues, capacity, and seating availability.
+- Browse events after signing in, then register for the one you picked, with your name and email prefilled from your account.
+- One seat per person per event: registering again for the same event is refused instead of quietly taking another seat.
+- See every ticket you hold after a reload, and reopen its QR pass from the list.
 - Create events with descriptions from the admin panel.
 - Add event-specific gates with assigned volunteers.
 - Show issued and remaining seats with a per-tier breakdown for every event.
@@ -78,11 +81,11 @@ This runs the FastAPI contract tests and verifies that the React app builds.
 | Admin | `POST /events` | Create a new event from the admin panel. |
 | Admin | `DELETE /events/{id}` | Delete an event and everything attached to it. |
 | Admin | `POST /gates` | Add a gate to an event. |
-| ET-01 | `POST /tickets` | Create attendee and issue ticket if event capacity remains, otherwise join the waitlist. |
+| ET-01 | `POST /tickets` | Create attendee and issue ticket if event capacity remains, otherwise join the waitlist. 409 if that attendee already holds a ticket for the event. |
 | ET-01 | `GET /tickets/{id}` | Return ticket details for the ticket owner/demo flow. |
 | ET-02, ET-03 | `POST /scans` | Validate a ticket QR or ticket ID at a gate. |
 | ET-04 | `GET /gates/status` | Return live scan counts and last synced time by gate. |
-| ET-07 | `GET /me/registrations` | Return the caller's own waitlist places, with live position and any ticket issued by a promotion. |
+| ET-07 | `GET /me/registrations` | Return the caller's own waitlist places, with live position and any ticket issued by a promotion, plus the tickets they currently hold. |
 | ET-07 | `DELETE /me/waitlist/{entry_id}` | Withdraw from a waitlist and close the gap in the queue. |
 | ET-07 | `GET /events/{id}/waitlist` | Return an event's waiting attendees, admin only. |
 | Admin | `GET /events/{id}/stats` | Return per-event attendance, check-in, waitlist, and recently promoted rows. |
@@ -122,6 +125,31 @@ checked in, because the seat is released as soon as the ticket is revoked. That
 is deliberate, but it is a policy choice rather than a technical necessity, so
 change it in `revoke_ticket` if the event's rules say otherwise.
 
+## Who owns a ticket
+
+A ticket records the account that requested it in `tickets.user_id`, and the
+person the seat is for in `tickets.attendee_id`. Those are deliberately separate:
+one account can book several different attendees for the same event, which the
+registration form has always allowed.
+
+Two rules follow from that, both in `issue_ticket`:
+
+- **One seat per person per event.** A second active ticket for the same
+  `(user, attendee, event)` is a `409`. Without it a double click or a retry
+  after a dropped connection hands out a second seat and silently shrinks the
+  event. The check runs *before* the capacity test, so someone who already holds
+  a seat is never pushed into the waitlist because the event filled up after they
+  booked. Revoked tickets do not count, so a revoked person may register again.
+- **Promotions carry the owner.** `promote_next_waitlisted` passes the queue
+  entry's `user_id` onto the ticket it issues, so a ticket handed over by a
+  revocation lands in that account's "my tickets" as well as being reachable
+  through the waitlist entry.
+
+`tickets.user_id` is nullable and is not backfilled by
+`migrate_existing_database()`: a pre-existing ticket has no recorded owner, and
+the attendee is not the account that booked it. Those tickets simply do not
+appear in anyone's "my tickets" list.
+
 ### Waiting is notified in-app
 
 The promotion notice is in-app polling: the user workspace asks
@@ -130,6 +158,10 @@ The promotion notice is in-app polling: the user workspace asks
 push channel yet. `promote_next_waitlisted` is the single place a promotion is
 created, so adding one later means adding a send there, and `promoted_ticket_id`
 already carries the recipient's ticket.
+
+The same poll also carries `tickets`, the list behind "my tickets", so a
+promotion shows up in the queue notice and the ticket list on the same tick and
+the two can never disagree.
 
 ## Database
 

@@ -85,6 +85,7 @@ def join_waitlist(
     campus_id: str | None,
     tier: str,
     user_id: int | None = None,
+    attendee: Attendee | None = None,
 ) -> WaitlistEntry:
     """Place a person on the queue, or return the entry they already hold.
 
@@ -93,7 +94,8 @@ def join_waitlist(
     promoted several times, each time taking a seat from the person genuinely
     next in line.
     """
-    attendee = _get_or_create_attendee(db, attendee_name, attendee_contact, campus_id)
+    if attendee is None:
+        attendee = _get_or_create_attendee(db, attendee_name, attendee_contact, campus_id)
 
     existing = (
         db.query(WaitlistEntry)
@@ -159,6 +161,7 @@ def _issue_ticket_record(
     campus_id: str | None,
     tier: str,
     attendee: Attendee | None = None,
+    user_id: int | None = None,
 ) -> Ticket:
     tier = tier.strip().lower()
     if tier not in TIER_PREFIXES:
@@ -175,6 +178,7 @@ def _issue_ticket_record(
         tier=tier,
         seat_number=seat_number,
         status="issued",
+        user_id=user_id,
     )
     db.add(ticket)
     db.flush()
@@ -214,6 +218,10 @@ def promote_next_waitlisted(db: Session, event_id: int) -> PromotedAttendeeInfo 
         campus_id=entry.campus_id,
         tier=entry.tier,
         attendee=entry.attendee,
+        # The queue row remembers who asked, so the promoted ticket lands in that
+        # account's "my tickets" too rather than only being reachable through the
+        # waitlist entry.
+        user_id=entry.user_id,
     )
 
     entry.status = "promoted"
@@ -243,6 +251,33 @@ def promote_next_waitlisted(db: Session, event_id: int) -> PromotedAttendeeInfo 
     )
 
 
+def find_active_ticket_for_user(
+    db: Session,
+    event_id: int,
+    user_id: int | None,
+    attendee_id: int | None = None,
+) -> Ticket | None:
+    """A live ticket this account already holds for an event.
+
+    Revoked tickets are excluded, so someone whose seat was freed and then handed
+    to the waitlist can register again rather than being locked out forever.
+
+    ``attendee_id`` narrows the check to one person. One account may still book
+    several different people for the same event -- the form has always allowed
+    that -- so the block is only on handing the same attendee a second seat.
+    """
+    if user_id is None:
+        return None
+    query = db.query(Ticket).filter(
+        Ticket.event_id == event_id,
+        Ticket.user_id == user_id,
+        Ticket.status != "revoked",
+    )
+    if attendee_id is not None:
+        query = query.filter(Ticket.attendee_id == attendee_id)
+    return query.order_by(Ticket.id.asc()).first()
+
+
 def issue_ticket(db: Session, payload: TicketCreate, user_id: int | None = None) -> Ticket | WaitlistEntry:
     event = db.get(Event, payload.event_id)
     if event is None:
@@ -251,6 +286,25 @@ def issue_ticket(db: Session, payload: TicketCreate, user_id: int | None = None)
     tier = payload.tier.strip().lower()
     if tier not in TIER_PREFIXES:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Choose General, Premium, or VIP seating")
+
+    attendee = _get_or_create_attendee(
+        db,
+        payload.attendee_name,
+        str(payload.attendee_contact),
+        payload.campus_id,
+    )
+
+    # One seat per person per event. Without this a double click, a retry after a
+    # dropped connection, or one person submitting twice hands out a second seat
+    # for the same attendee, and each of those silently shrinks the event. The
+    # waitlist join is idempotent for the same reason. This runs before the
+    # capacity check on purpose: a user who already holds a seat must not be
+    # dropped into the queue just because the event filled up after they booked.
+    if find_active_ticket_for_user(db, event_id=event.id, user_id=user_id, attendee_id=attendee.id) is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="You already hold a ticket for this event",
+        )
 
     issued_count = db.query(Ticket).filter(Ticket.event_id == event.id, Ticket.status != "revoked").count()
     if issued_count >= event.capacity:
@@ -262,6 +316,7 @@ def issue_ticket(db: Session, payload: TicketCreate, user_id: int | None = None)
             campus_id=payload.campus_id,
             tier=tier,
             user_id=user_id,
+            attendee=attendee,
         )
 
     ticket = _issue_ticket_record(
@@ -271,19 +326,36 @@ def issue_ticket(db: Session, payload: TicketCreate, user_id: int | None = None)
         attendee_contact=str(payload.attendee_contact),
         campus_id=payload.campus_id,
         tier=tier,
+        attendee=attendee,
+        user_id=user_id,
     )
     db.commit()
     db.refresh(ticket)
     return ticket
 
 
+def _ticket_detail(ticket: Ticket) -> TicketDetail:
+    return TicketDetail(
+        ticket_id=ticket.id,
+        qr_signature=ticket.qr_signature or "",
+        tier=ticket.tier,
+        seat_number=ticket.seat_number or "",
+        status=ticket.status,
+        event=EventOut.model_validate(ticket.event),
+        attendee=AttendeeOut.model_validate(ticket.attendee),
+    )
+
+
 def get_my_registrations(db: Session, user: User) -> MyRegistrations:
-    """The caller's own queue places, newest first.
+    """Everything the caller holds, both halves of it.
 
     This is the read side of ET-07's in-app notice: the frontend polls it to
-    show a live position and to surface a ticket that ET-11's revocation
-    handed them. Issued tickets are not listed here because issuance records no
-    owning user -- the attendee, not the submitting account, is the subject.
+    show a live position, to surface a ticket that ET-11's revocation handed
+    them, and to redraw "my tickets" after a reload. The two lists answer
+    different questions and overlap on purpose -- a promoted attendee reaches
+    their ticket through the waitlist entry, since ``promote_next_waitlisted``
+    issues from queue data that carries no owning account, while a directly
+    issued ticket is reachable through ``tickets.user_id``.
     """
     entries = (
         db.query(WaitlistEntry)
@@ -303,15 +375,7 @@ def get_my_registrations(db: Session, user: User) -> MyRegistrations:
                 .one_or_none()
             )
             if ticket is not None:
-                promoted = TicketDetail(
-                    ticket_id=ticket.id,
-                    qr_signature=ticket.qr_signature or "",
-                    tier=ticket.tier,
-                    seat_number=ticket.seat_number or "",
-                    status=ticket.status,
-                    event=EventOut.model_validate(ticket.event),
-                    attendee=AttendeeOut.model_validate(ticket.attendee),
-                )
+                promoted = _ticket_detail(ticket)
 
         rows.append(
             MyWaitlistEntry(
@@ -331,7 +395,25 @@ def get_my_registrations(db: Session, user: User) -> MyRegistrations:
             )
         )
 
-    return MyRegistrations(waitlist=rows)
+    return MyRegistrations(waitlist=rows, tickets=_my_tickets(db, user))
+
+
+def _my_tickets(db: Session, user: User) -> list[TicketDetail]:
+    """The caller's own live tickets, newest first.
+
+    Revoked rows are left out: they no longer hold a seat, and the admin
+    revocation that freed it is what the waitlist handover is for. Tickets
+    issued before ``tickets.user_id`` existed have no owner recorded and are
+    not recoverable from here.
+    """
+    tickets = (
+        db.query(Ticket)
+        .options(joinedload(Ticket.event), joinedload(Ticket.attendee))
+        .filter(Ticket.user_id == user.id, Ticket.status != "revoked")
+        .order_by(Ticket.issued_at.desc(), Ticket.id.desc())
+        .all()
+    )
+    return [_ticket_detail(ticket) for ticket in tickets]
 
 
 def revoke_ticket(db: Session, ticket_id: int) -> Ticket:

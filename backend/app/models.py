@@ -80,6 +80,10 @@ class Ticket(Base):
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, default=None)
     event_id: Mapped[int] = mapped_column(ForeignKey("events.event_id"), nullable=False)
     attendee_id: Mapped[int] = mapped_column(ForeignKey("attendees.attendee_id"), nullable=False)
+    # The signed-in account that requested this ticket, so "my tickets" can find
+    # it again after a reload. Nullable only so pre-existing rows survive the
+    # migration; issuance records no owner for tickets created before this.
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.user_id"), nullable=True, index=True)
 
     event: Mapped[Event] = relationship(back_populates="tickets")
     attendee: Mapped[Attendee] = relationship(back_populates="tickets")

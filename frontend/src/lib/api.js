@@ -26,7 +26,11 @@ async function request(path, options) {
     } else if (Array.isArray(problem.detail)) {
       message = problem.detail.map((e) => e.msg || JSON.stringify(e)).join(", ");
     }
-    throw new Error(message);
+    const error = new Error(message);
+    // Callers that need to branch on the failure -- a 409 from registering twice
+    // for one event, say -- cannot tell the cases apart from the message alone.
+    error.status = response.status;
+    throw error;
   }
 
   if (response.status === 204) return null;
