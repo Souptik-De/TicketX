@@ -1,19 +1,26 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+import hashlib
 import io
+import logging
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Response, status
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session, joinedload, subqueryload
 
+logger = logging.getLogger(__name__)
+
 from .auth import create_token, hash_password, require_roles, verify_password
+from .config import demo_seed_enabled
 from .database import SessionLocal, create_database, get_db
 from .models import Event, Gate, Scan, Ticket, User, Volunteer, WaitlistEntry
 from .schemas import (
     EventCreate,
     EventOut,
     EventStatsOut,
+    EventSuggestion,
+    EventSuggestionOut,
     GateCreate,
     GateOut,
     GateStatus,
@@ -34,7 +41,9 @@ from .schemas import (
     VolunteerOut,
     WaitlistEntryOut,
 )
-from .seed import seed_reference_data
+from .seed import seed_demo_data, seed_reference_data
+from . import groq
+from .recommend import rank_events, signal_label
 from .services import (
     build_attendance_csv,
     create_gate,
@@ -55,6 +64,11 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     create_database()
     with SessionLocal() as db:
         seed_reference_data(db)
+        # Opt-in only. Creates demo/demo123, so it is for previews and demos.
+        if demo_seed_enabled():
+            result = seed_demo_data(db)
+            if result.get("seeded"):
+                logger.info("Seeded the demo dataset. Sign in as %s", result.get("credentials"))
     yield
 
 
@@ -327,6 +341,109 @@ def withdraw_from_waitlist(
 
     leave_waitlist(db, entry)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+def _suggestion_signature(ranking, events: list[Event]) -> str:
+    """Identify the state the copy was written for.
+
+    Seat counts and the caller's own registrations both change what a reason can
+    legitimately say, so both go into the digest. Without that, a cached sentence
+    could keep describing "3 seats left" after the last one is taken.
+    """
+    parts = [f"{event.id}:{event.issued_count}:{event.capacity}" for event in events]
+    parts.append("own:" + ",".join(str(event_id) for event_id in sorted(ranking.registered_event_ids)))
+    return hashlib.sha256("|".join(parts).encode()).hexdigest()[:32]
+
+
+@app.get("/me/event-suggestions", response_model=EventSuggestionOut)
+def event_suggestions(
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(require_roles("user")),
+    db: Session = Depends(get_db),
+) -> EventSuggestionOut:
+    """Events to recommend to the caller, ranked without a model.
+
+    The ranking is deterministic and computed on every call, so it is never stale.
+    Only the one-line reason can come from Groq, and only from a cache: a request
+    never waits on the model. On a cold cache the rule-based reason is returned
+    immediately and the model call is queued as a background refresh for next
+    time.
+
+    Unlike the Google login integration, a missing API key is not an error. This
+    row is supplementary, so it degrades to rule-based copy rather than 503.
+    """
+    ranking = rank_events(db, current_user)
+    ai_enabled = groq.is_configured()
+
+    if not ranking.suggestions:
+        return EventSuggestionOut(items=[], cold_start=ranking.cold_start, ai_enabled=ai_enabled)
+
+    ordered_events = [suggestion.event for suggestion in ranking.suggestions]
+    signature = _suggestion_signature(ranking, ordered_events)
+    cached = groq.read_cache(current_user.id, signature)
+
+    if cached is None and ai_enabled:
+        # Materialised here, while the session is still open: the refresh runs
+        # after the response is sent and must not touch these ORM rows.
+        prompt_items = [
+            groq.PromptSuggestion(
+                event=groq.PromptEvent(
+                    id=event.id,
+                    title=event.title,
+                    venue=event.venue,
+                    date_time=event.date_time,
+                    capacity=event.capacity,
+                    seats_left=max(event.capacity - event.issued_count, 0),
+                    tiers=", ".join(
+                        f"{item['tier']}:{item['issued_count']}" for item in event.tier_counts
+                    ) or "none issued",
+                    registered=event.issued_count,
+                ),
+                signal=suggestion.signal,
+            )
+            for event, suggestion in zip(ordered_events, ranking.suggestions)
+        ]
+        background_tasks.add_task(
+            _refresh_suggestion_copy,
+            current_user.id,
+            signature,
+            prompt_items,
+            ranking.cold_start,
+        )
+
+    items = []
+    for suggestion in ranking.suggestions:
+        from_ai = cached.get(suggestion.event.id) if cached else None
+        items.append(
+            EventSuggestion(
+                event=EventOut.model_validate(suggestion.event),
+                reason=from_ai or suggestion.reason,
+                source="ai" if from_ai else "rule",
+                signal=signal_label(suggestion.signal),
+                score=round(suggestion.score, 4),
+            )
+        )
+
+    return EventSuggestionOut(
+        items=items,
+        cold_start=ranking.cold_start,
+        ai_enabled=ai_enabled,
+    )
+
+
+def _refresh_suggestion_copy(
+    user_id: int,
+    signature: str,
+    prompt_items: list[groq.PromptSuggestion],
+    cold_start: bool,
+) -> None:
+    """Populate the cache for next time. Failures here are silent by design."""
+    groq.write_reasons(
+        user_id=user_id,
+        signature=signature,
+        suggestions=prompt_items,
+        cold_start=cold_start,
+    )
 
 
 
