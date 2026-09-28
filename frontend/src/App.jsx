@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { CalendarDays, Compass, Home, LogOut, Moon, RadioTower, ScanLine, ShieldCheck, Sun, UserRound } from "lucide-react";
 
-import { getEvents, getGateStatus, getMyRegistrations, getVolunteers, leaveWaitlist, setAuthToken } from "./lib/api";
+import { getEventSuggestions, getEvents, getGateStatus, getMyRegistrations, getVolunteers, leaveWaitlist, setAuthToken } from "./lib/api";
 import { AdminPanel } from "./components/AdminPanel";
 import { EventBrowser } from "./components/EventBrowser";
 import { GateStatus } from "./components/GateStatus";
@@ -12,6 +12,7 @@ import { MyWaitlist } from "./components/MyWaitlist";
 import { OperationsSummary } from "./components/OperationsSummary";
 import { ScannerPanel } from "./components/ScannerPanel";
 import { ScanResultCard } from "./components/ScanResultCard";
+import { SuggestedEvents } from "./components/SuggestedEvents";
 import { TicketIssuer } from "./components/TicketIssuer";
 import { TicketPreview } from "./components/TicketPreview";
 import { TicketXLogo } from "./components/TicketXLogo";
@@ -26,6 +27,11 @@ const workspaces = {
 // notice depends on this, since there is no push channel. The same poll carries
 // "my tickets", so a promotion shows up in both places on the same tick.
 const WAITLIST_POLL_MS = 15000;
+
+// How long to wait before picking up model-written event reasons. The first
+// response is rule-based while the copy is generated in the background, so this
+// is a single, self-limiting retry rather than a poll.
+const SUGGESTION_RETRY_MS = 5000;
 
 function getStoredUser() {
   try {
@@ -53,6 +59,8 @@ function App() {
   const [loadError, setLoadError] = useState("");
   const [myRegistrations, setMyRegistrations] = useState([]);
   const [myTickets, setMyTickets] = useState([]);
+  const [suggestions, setSuggestions] = useState(null);
+  const retryTimer = useRef(null);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -198,6 +206,44 @@ function App() {
     };
   }, [sessionUser]);
 
+  // Recommendations are advisory, so a failure here must never disturb the
+  // catalog below it. Silently leaving the row out is the whole error strategy.
+  const refreshSuggestions = useCallback(async ({ allowRetry = true } = {}) => {
+    if (!sessionUser || sessionUser.role !== "user") {
+      return;
+    }
+    try {
+      const data = await getEventSuggestions();
+      setSuggestions(data);
+
+      // The first response is rule-based copy while the server generates the real
+      // wording in the background, so this is when the attendee would otherwise be
+      // looking at the boring version. One refetch picks up the generated copy
+      // without making them reload the page.
+      //
+      // Only the first load arms this. The retry passes allowRetry: false, so an
+      // unreachable or unconfigured model cannot turn into an endless poll.
+      const isStillRuleBased = (data?.items?.length ?? 0) > 0 && data.items.every((item) => item.source !== "ai");
+      if (allowRetry && data?.ai_enabled && isStillRuleBased) {
+        clearTimeout(retryTimer.current);
+        retryTimer.current = setTimeout(() => refreshSuggestions({ allowRetry: false }), SUGGESTION_RETRY_MS);
+      }
+    } catch {
+      // Left as-is: the row is supplementary.
+    }
+  }, [sessionUser]);
+
+  useEffect(() => {
+    if (!sessionUser) {
+      setSuggestions(null);
+      return undefined;
+    }
+    refreshSuggestions();
+    // Cancelled on unmount and on sign-out so a pending retry cannot land in a
+    // different session.
+    return () => clearTimeout(retryTimer.current);
+  }, [refreshSuggestions]);
+
   async function handleLeaveWaitlist(entryId) {
     await leaveWaitlist(entryId);
     await refreshMyRegistrations();
@@ -216,6 +262,9 @@ function App() {
       getEvents().then(setEvents).catch(() => undefined);
     }
     refreshMyRegistrations();
+    // Registering changes what the recommendations are based on, so the row is
+    // re-fetched rather than left showing events the attendee has just joined.
+    refreshSuggestions({ allowRetry: false });
   }
 
   function clearSession() {
@@ -229,6 +278,7 @@ function App() {
     setAllGateStatus([]);
     setMyRegistrations([]);
     setMyTickets([]);
+    setSuggestions(null);
   }
 
   function handleLogout() {
@@ -350,6 +400,13 @@ function App() {
 
       {workspace.id === "user" && view === "browse" && (
         <section className="user-browse">
+          <SuggestedEvents
+            suggestions={suggestions}
+            myTickets={myTickets}
+            selectedEventId={selectedEventId}
+            onSelect={setSelectedEventId}
+          />
+
           <EventBrowser
             events={events}
             isLoading={isLoadingEvents}
