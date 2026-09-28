@@ -15,9 +15,9 @@ import {
 import { TicketXLogo } from "./TicketXLogo";
 
 const roles = [
-  { id: "user", label: "User", icon: UserRound },
-  { id: "admin", label: "Admin", icon: ShieldCheck },
-  { id: "scanner", label: "Gate scanner", icon: ScanLine },
+  { id: "user", label: "User", shortLabel: "User", icon: UserRound },
+  { id: "admin", label: "Admin", shortLabel: "Admin", icon: ShieldCheck },
+  { id: "scanner", label: "Gate scanner", shortLabel: "Scanner", icon: ScanLine },
 ];
 
 function formatDate(value) {
@@ -44,11 +44,24 @@ export function HomePage({ events, isLoading, error, sessionUser, theme, onTheme
   return (
     <main className="home-shell" id="top">
       <header className="home-nav">
-        <a className="home-brand" href="#top" aria-label="TicketX home">
-          <TicketXLogo size={26} />
-          <strong>TicketX</strong>
-        </a>
-        <nav className="home-actions" aria-label="Account workspaces">
+        <div className="home-nav-bar">
+          <a className="home-brand" href="#top" aria-label="TicketX home">
+            <TicketXLogo size={28} />
+            <strong>TicketX</strong>
+          </a>
+          <div className="home-nav-controls">
+            <button className="theme-toggle" type="button" onClick={onThemeToggle} aria-label="Toggle night mode" title="Toggle theme">
+              {theme === "light" ? <Moon size={18} aria-hidden="true" /> : <Sun size={18} aria-hidden="true" />}
+            </button>
+            {sessionUser && (
+              <button className="theme-toggle" type="button" onClick={onLogout} aria-label="Sign out" title="Sign out">
+                <LogOut size={18} aria-hidden="true" />
+              </button>
+            )}
+          </div>
+        </div>
+
+        <nav className="home-roles" aria-label="Account workspaces">
           {roles.map((role) => {
             const Icon = role.icon;
             const isCurrent = sessionUser?.role === role.id;
@@ -59,19 +72,12 @@ export function HomePage({ events, isLoading, error, sessionUser, theme, onTheme
                 type="button"
                 onClick={() => onRoleAccess(role.id)}
               >
-                <Icon size={17} aria-hidden="true" />
-                <span>{isCurrent ? `Open ${role.label}` : role.label}</span>
+                <Icon size={16} aria-hidden="true" />
+                <span className="role-label-full">{isCurrent ? `Open ${role.label}` : role.label}</span>
+                <span className="role-label-short">{isCurrent ? `Open ${role.shortLabel}` : role.shortLabel}</span>
               </button>
             );
           })}
-          <button className="theme-toggle" type="button" onClick={onThemeToggle} aria-label="Toggle night mode">
-            {theme === "light" ? <Moon size={18} aria-hidden="true" /> : <Sun size={18} aria-hidden="true" />}
-          </button>
-          {sessionUser && (
-            <button className="theme-toggle" type="button" onClick={onLogout} aria-label="Sign out">
-              <LogOut size={18} aria-hidden="true" />
-            </button>
-          )}
         </nav>
       </header>
 

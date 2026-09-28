@@ -261,38 +261,44 @@ function App() {
   return (
     <main className="app-shell">
       <header className="topbar">
-        <div className="brand-block">
-          <p className="eyebrow">Secure Entry System</p>
-          <h1 className="brand-title">
-            <TicketXLogo size={30} />
-            TicketX
-          </h1>
+        <div className="topbar-main">
+          <div className="brand-block">
+            <p className="eyebrow">Secure Entry System</p>
+            <h1 className="brand-title">
+              <TicketXLogo size={28} />
+              TicketX
+            </h1>
+          </div>
+          <div className="top-action-buttons">
+            <button className="theme-toggle" type="button" onClick={() => setView("home")} aria-label="Return to events" title="Events">
+              <Home size={18} aria-hidden="true" />
+            </button>
+            <button
+              className="theme-toggle"
+              type="button"
+              onClick={() => setTheme((current) => (current === "light" ? "dark" : "light"))}
+              aria-label="Toggle night mode"
+              title="Toggle theme"
+            >
+              {theme === "light" ? <Moon size={18} aria-hidden="true" /> : <Sun size={18} aria-hidden="true" />}
+            </button>
+            <button className="theme-toggle" type="button" onClick={handleLogout} aria-label="Sign out" title="Sign out">
+              <LogOut size={18} aria-hidden="true" />
+            </button>
+          </div>
         </div>
-        <div className="top-actions">
-          <button className="theme-toggle" type="button" onClick={() => setView("home")} aria-label="Return to events">
-            <Home size={18} aria-hidden="true" />
-          </button>
+
+        <div className="topbar-pills">
           {selectedEvent && (
             <div className="event-pill">
-              <CalendarDays size={18} aria-hidden="true" />
+              <CalendarDays size={16} aria-hidden="true" />
               <span>{selectedEvent.title}</span>
             </div>
           )}
           <div className="workspace-badge">
-            <WorkspaceIcon size={18} aria-hidden="true" />
+            <WorkspaceIcon size={16} aria-hidden="true" />
             <span>{workspace.label}</span>
           </div>
-          <button
-            className="theme-toggle"
-            type="button"
-            onClick={() => setTheme((current) => (current === "light" ? "dark" : "light"))}
-            aria-label="Toggle night mode"
-          >
-            {theme === "light" ? <Moon size={18} aria-hidden="true" /> : <Sun size={18} aria-hidden="true" />}
-          </button>
-          <button className="theme-toggle" type="button" onClick={handleLogout} aria-label="Sign out">
-            <LogOut size={18} aria-hidden="true" />
-          </button>
         </div>
       </header>
 
