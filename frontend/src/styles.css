@@ -2430,3 +2430,66 @@ dd {
     justify-content: center;
   }
 }
+
+/* "Recommended for you" row. The cards are the catalog's, so only the reason
+   line underneath and the section wrapper needed new rules. */
+
+.suggested-events {
+  display: grid;
+  gap: 18px;
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius, 10px);
+  background: var(--surface-soft);
+}
+
+.suggested-events .catalog-heading {
+  margin: 0;
+}
+
+.suggested-events .eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.suggestion-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* The wrapper is the grid item, so the card inside has to stretch to match the
+   tallest card in the row or the reasons would not line up. */
+.suggestion-wrap > .event-card {
+  flex: 1 1 auto;
+}
+
+.suggestion-reason {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin: 0;
+  padding: 9px 12px;
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 0.86rem;
+  line-height: 1.45;
+}
+
+.suggestion-reason svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: var(--brand);
+}
+
+.suggestion-reason span {
+  min-width: 0;
+}
+
+@media (max-width: 640px) {
+  .suggested-events {
+    padding: 14px;
+  }
+}
