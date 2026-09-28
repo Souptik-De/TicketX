@@ -1,42 +1,14 @@
-import {
-  ArrowRight,
-  Armchair,
-  CalendarDays,
-  LogOut,
-  MapPin,
-  Moon,
-  ScanLine,
-  ShieldCheck,
-  Sun,
-  Ticket,
-  UserRound,
-} from "lucide-react";
+import { ArrowRight, LogOut, Moon, ScanLine, ShieldCheck, Sun, Ticket, UserRound } from "lucide-react";
 
+import { EventCard } from "./EventCard";
 import { TicketXLogo } from "./TicketXLogo";
+import { formatDate, remainingSeats } from "../lib/format";
 
 const roles = [
   { id: "user", label: "User", shortLabel: "User", icon: UserRound },
   { id: "admin", label: "Admin", shortLabel: "Admin", icon: ShieldCheck },
   { id: "scanner", label: "Gate scanner", shortLabel: "Scanner", icon: ScanLine },
 ];
-
-function formatDate(value) {
-  return new Intl.DateTimeFormat("en-IN", {
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(new Date(value));
-}
-
-function eventMonth(value) {
-  return new Intl.DateTimeFormat("en-IN", { month: "short" }).format(new Date(value));
-}
-
-function eventDay(value) {
-  return new Intl.DateTimeFormat("en-IN", { day: "2-digit" }).format(new Date(value));
-}
 
 export function HomePage({ events, isLoading, error, sessionUser, theme, onThemeToggle, onRoleAccess, onLogout, onGetTicket }) {
   const featuredEvent = events[0];
@@ -116,53 +88,15 @@ export function HomePage({ events, isLoading, error, sessionUser, theme, onTheme
         )}
 
         <div className="event-card-grid">
-          {events.map((event) => {
-            const remaining = Math.max(event.capacity - event.issued_count, 0);
-            const occupancy = event.capacity ? Math.min((event.issued_count / event.capacity) * 100, 100) : 0;
-            const soldOut = remaining === 0;
-
-            return (
-              <article className="event-card" key={event.id}>
-                <div className="event-card-topline">
-                  <time className="event-date" dateTime={event.date_time}>
-                    <strong>{eventDay(event.date_time)}</strong>
-                    <span>{eventMonth(event.date_time)}</span>
-                  </time>
-                  <span className={`availability-tag${soldOut ? " sold-out" : ""}`}>
-                    {soldOut ? "Sold out - waitlist open" : `${remaining} seats left`}
-                  </span>
-                </div>
-
-                <div className="event-card-copy">
-                  <h3>{event.title}</h3>
-                  <p>{event.description || "More details about this event will be announced soon."}</p>
-                </div>
-
-                <div className="event-facts">
-                  <span><CalendarDays size={17} aria-hidden="true" /> {formatDate(event.date_time)}</span>
-                  <span><MapPin size={17} aria-hidden="true" /> {event.venue}</span>
-                  <span><Armchair size={17} aria-hidden="true" /> {event.issued_count} of {event.capacity} issued</span>
-                </div>
-
-                <div className="capacity-meter" aria-label={`${Math.round(occupancy)} percent of seats issued`}>
-                  <span style={{ width: `${occupancy}%` }} />
-                </div>
-
-                <div className="event-card-footer">
-                  <div className="home-tier-list" aria-label="Issued seats by tier">
-                    {["general", "premium", "vip"].map((tier) => {
-                      const count = event.tier_counts?.find((item) => item.tier === tier)?.issued_count ?? 0;
-                      return <span key={tier}><strong>{count}</strong> {tier}</span>;
-                    })}
-                  </div>
-                  <button className={`primary-button${soldOut ? " waitlist-button" : ""}`} type="button" onClick={() => onGetTicket(event.id)}>
-                    <Ticket size={18} aria-hidden="true" />
-                    {soldOut ? "Join waitlist" : "Get ticket"}
-                  </button>
-                </div>
-              </article>
-            );
-          })}
+          {events.map((event) => (
+            <EventCard
+              key={event.id}
+              event={event}
+              actionIcon={Ticket}
+              actionLabel={remainingSeats(event) === 0 ? "Join waitlist" : "Get ticket"}
+              onSelect={onGetTicket}
+            />
+          ))}
         </div>
       </section>
 

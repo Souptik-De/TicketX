@@ -1187,6 +1187,14 @@ def test_migration_backfills_waitlist_links_on_a_legacy_database() -> None:
             # One entry matching an existing Attendee, one needing a new Attendee row,
             # and one promoted row that must keep its place in history.
             setup.execute(text("INSERT INTO attendees (attendee_id, name, campus_id, contact_email) VALUES (1, 'Riya Sen', 'CAMP-1', 'riya@example.edu')"))
+            # A pre-ownership ticket: it must survive with user_id left NULL rather
+            # than being attributed to whoever happens to hold the seat today.
+            setup.execute(
+                text(
+                    "INSERT INTO tickets (ticket_id, qr_signature, tier, seat_number, status, issued_at, event_id, attendee_id) "
+                    "VALUES (1, 'legacy-sig', 'general', NULL, 'issued', '2026-08-01 08:00:00', 1, 1)"
+                )
+            )
             setup.execute(
                 text(
                     "INSERT INTO waitlist_entries (id, event_id, attendee_name, attendee_contact, campus_id, tier, position, status, created_at) "
@@ -1228,6 +1236,19 @@ def test_migration_backfills_waitlist_links_on_a_legacy_database() -> None:
             "ix_waitlist_entries_attendee_id",
             "ix_waitlist_entries_user_id",
         }
+
+        # Tickets predate ownership, so user_id is added empty and indexed rather
+        # than backfilled: the attendee is not the account that booked.
+        ticket_columns = {column["name"] for column in inspector.get_columns("tickets")}
+        assert "user_id" in ticket_columns
+        assert {index["name"] for index in inspector.get_indexes("tickets")} >= {"ix_tickets_user_id"}
+        with legacy_engine.begin() as connection:
+            legacy_ticket = connection.execute(
+                text("SELECT user_id, seat_number FROM tickets WHERE ticket_id = 1")
+            ).mappings().one()
+            assert legacy_ticket["user_id"] is None
+            # The seat-number backfill still ran alongside the new column.
+            assert legacy_ticket["seat_number"] == "GEN-001"
 
         with legacy_engine.begin() as connection:
             rows = connection.execute(
@@ -1561,3 +1582,179 @@ def test_withdrawn_entry_is_absent_from_the_admin_waitlist() -> None:
     assert stats["waitlist"] == []
     # A withdrawal is neither a promotion nor a live place in the queue.
     assert stats["promoted"] == []
+
+
+def test_registering_twice_for_one_event_is_rejected() -> None:
+    """A double click or a retry must not hand the same attendee a second seat.
+
+    The waitlist join has always been idempotent; the ticketed path was not, so
+    a duplicate submit silently consumed capacity that someone in the queue
+    needed.
+    """
+    reset_database()
+    client = TestClient(app)
+    admin_headers = auth_headers(client, "admin", "admin123")
+    user_headers = auth_headers(client, "attendee", "attendee123")
+    event_id = client.post(
+        "/events",
+        json={
+            "title": "Duplicate Guard",
+            "description": "",
+            "date_time": "2026-12-01T18:00:00",
+            "venue": "Main Auditorium",
+            "capacity": 10,
+        },
+        headers=admin_headers,
+    ).json()["id"]
+
+    payload = {
+        "event_id": event_id,
+        "attendee_name": "Riya Sen",
+        "attendee_contact": "riya@example.edu",
+        "campus_id": "CAMP-DUP",
+        "tier": "general",
+    }
+    first = client.post("/tickets", json=payload, headers=user_headers)
+    second = client.post("/tickets", json=payload, headers=user_headers)
+
+    assert first.status_code == 201
+    assert first.json()["outcome"] == "ticketed"
+    assert second.status_code == 409
+    assert "already hold a ticket" in second.json()["detail"]
+
+    # One seat issued, and the event's capacity is untouched by the retry.
+    event = client.get("/events").json()
+    assert next(item for item in event if item["id"] == event_id)["issued_count"] == 1
+
+    # The block is scoped to the person, not the account: one account can still
+    # book a different attendee for the same event.
+    companion = client.post(
+        "/tickets",
+        json={**payload, "attendee_name": "Companion", "attendee_contact": "companion@example.edu", "campus_id": "CAMP-2"},
+        headers=user_headers,
+    )
+    assert companion.status_code == 201
+
+
+def test_a_revoked_ticket_can_be_registered_for_again() -> None:
+    """Revocation hands the seat to the waitlist, but the person may rebook if
+    it is still their turn to want it."""
+    reset_database()
+    client = TestClient(app)
+    admin_headers = auth_headers(client, "admin", "admin123")
+    user_headers = auth_headers(client, "attendee", "attendee123")
+    event_id = _capacity_one_event(client, admin_headers, "Rebook After Revoke")
+
+    issued = client.post(
+        "/tickets",
+        json={"event_id": event_id, "attendee_name": "Riya Sen", "attendee_contact": "riya@example.edu", "campus_id": "CAMP-RB"},
+        headers=user_headers,
+    ).json()
+    blocked = client.post(
+        "/tickets",
+        json={"event_id": event_id, "attendee_name": "Riya Sen", "attendee_contact": "riya@example.edu", "campus_id": "CAMP-RB"},
+        headers=user_headers,
+    )
+    assert blocked.status_code == 409
+
+    client.post(f"/tickets/{issued['ticket_id']}/revoke", headers=admin_headers)
+
+    # The seat is free and the old ticket no longer counts as held, so the same
+    # account and attendee can book it again.
+    rebooked = client.post(
+        "/tickets",
+        json={"event_id": event_id, "attendee_name": "Riya Sen", "attendee_contact": "riya@example.edu", "campus_id": "CAMP-RB"},
+        headers=user_headers,
+    )
+    assert rebooked.status_code == 201
+    assert rebooked.json()["outcome"] == "ticketed"
+
+
+def test_me_registrations_lists_the_callers_own_tickets() -> None:
+    """The list behind "my tickets", so a ticket survives a reload."""
+    reset_database()
+    client = TestClient(app)
+    admin_headers = auth_headers(client, "admin", "admin123")
+    user_headers = auth_headers(client, "attendee", "attendee123")
+    other = client.post(
+        "/auth/register",
+        json={"username": "second", "password": "second123", "display_name": "Second User", "role": "user"},
+    ).json()
+    other_headers = {"Authorization": f"Bearer {other['token']}"}
+
+    fest = client.get("/events").json()[0]["id"]
+    other_event = client.post(
+        "/events",
+        json={
+            "title": "Second Event",
+            "description": "",
+            "date_time": "2026-12-05T18:00:00",
+            "venue": "Hall B",
+            "capacity": 50,
+        },
+        headers=admin_headers,
+    ).json()["id"]
+
+    mine = client.post(
+        "/tickets",
+        json={"event_id": fest, "attendee_name": "Student User", "attendee_contact": "me@example.edu", "campus_id": "CAMP-ME", "tier": "premium"},
+        headers=user_headers,
+    ).json()
+    theirs = client.post(
+        "/tickets",
+        json={"event_id": other_event, "attendee_name": "Second User", "attendee_contact": "them@example.edu", "campus_id": "CAMP-THEM"},
+        headers=other_headers,
+    ).json()
+
+    body = client.get("/me/registrations", headers=user_headers).json()
+    assert [item["ticket_id"] for item in body["tickets"]] == [mine["ticket_id"]]
+    # The full pass is embedded, so the QR renders without a second fetch.
+    ticket = body["tickets"][0]
+    assert ticket["tier"] == "premium"
+    assert ticket["seat_number"] == "PRE-001"
+    assert ticket["status"] == "issued"
+    assert ticket["qr_signature"]
+    assert ticket["event"]["title"] == "Techno Cultural Fest 2026"
+    assert ticket["attendee"]["campus_id"] == "CAMP-ME"
+
+    # Another account never sees it, and never sees their own in this list.
+    assert theirs["ticket_id"] != mine["ticket_id"]
+    other_body = client.get("/me/registrations", headers=other_headers).json()
+    assert [item["ticket_id"] for item in other_body["tickets"]] == [theirs["ticket_id"]]
+
+    # A revoked ticket drops out: it no longer holds a seat.
+    client.post(f"/tickets/{mine['ticket_id']}/revoke", headers=admin_headers)
+    after = client.get("/me/registrations", headers=user_headers).json()
+    assert after["tickets"] == []
+    assert after["waitlist"] == []
+
+
+def test_promoted_ticket_also_appears_in_my_tickets() -> None:
+    """A seat freed by a revocation reaches the waitlist, and the ticket it
+    issues belongs to the same account that asked for the place."""
+    reset_database()
+    client = TestClient(app)
+    admin_headers = auth_headers(client, "admin", "admin123")
+    user_headers = auth_headers(client, "attendee", "attendee123")
+    event_id = _capacity_one_event(client, admin_headers, "Promotion Ownership")
+
+    holder = client.post(
+        "/tickets",
+        json={"event_id": event_id, "attendee_name": "Seat Holder", "attendee_contact": "holder@example.edu"},
+        headers=user_headers,
+    ).json()
+    client.post(
+        "/tickets",
+        json={"event_id": event_id, "attendee_name": "Next In Line", "attendee_contact": "next@example.edu", "campus_id": "CAMP-NEXT"},
+        headers=user_headers,
+    )
+
+    client.post(f"/tickets/{holder['ticket_id']}/revoke", headers=admin_headers)
+
+    body = client.get("/me/registrations", headers=user_headers).json()
+    assert [item["event"]["id"] for item in body["tickets"]] == [event_id]
+    assert body["tickets"][0]["attendee"]["campus_id"] == "CAMP-NEXT"
+    # The same ticket is also reachable through the promoted queue entry.
+    assert [entry["promoted_ticket"]["ticket_id"] for entry in body["waitlist"]] == [
+        body["tickets"][0]["ticket_id"]
+    ]

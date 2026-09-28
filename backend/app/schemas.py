@@ -24,6 +24,10 @@ class UserOut(BaseModel):
     username: str
     role: str
     display_name: str
+    # Only ever populated for Google sign-ins, where the provider supplies it.
+    # The registration form prefills from this and leaves the field blank
+    # otherwise, so a password account is never assumed to own an address.
+    email: str | None = None
 
 
 class LoginResponse(BaseModel):
@@ -156,7 +160,15 @@ class MyWaitlistEntry(BaseModel):
 
 
 class MyRegistrations(BaseModel):
+    """Everything the caller holds for themselves, in one place.
+
+    The user workspace polls this, so ``waitlist`` and ``tickets`` arrive
+    together: the first drives the live queue position and the promotion notice,
+    the second is the "my tickets" list that survives a reload.
+    """
+
     waitlist: list[MyWaitlistEntry] = []
+    tickets: list[TicketDetail] = []
 
 
 

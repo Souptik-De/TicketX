@@ -77,6 +77,8 @@ def migrate_existing_database() -> None:
                 connection.execute(text("ALTER TABLE tickets ADD COLUMN seat_number VARCHAR(24)"))
             if "revoked_at" not in ticket_columns:
                 connection.execute(text("ALTER TABLE tickets ADD COLUMN revoked_at DATETIME"))
+            if "user_id" not in ticket_columns:
+                connection.execute(text("ALTER TABLE tickets ADD COLUMN user_id INTEGER"))
 
             rows = connection.execute(
                 text(
@@ -95,6 +97,10 @@ def migrate_existing_database() -> None:
                     text("UPDATE tickets SET seat_number = :seat_number WHERE ticket_id = :ticket_id"),
                     {"seat_number": seat_number, "ticket_id": row["ticket_id"]},
                 )
+
+            connection.execute(
+                text("CREATE INDEX IF NOT EXISTS ix_tickets_user_id ON tickets (user_id)")
+            )
 
         if "waitlist_entries" in tables:
             waitlist_columns = {column["name"] for column in inspector.get_columns("waitlist_entries")}

@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
-import { CalendarDays, Home, LogOut, Moon, RadioTower, ScanLine, ShieldCheck, Sun, UserRound } from "lucide-react";
+import { CalendarDays, Compass, Home, LogOut, Moon, RadioTower, ScanLine, ShieldCheck, Sun, UserRound } from "lucide-react";
 
 import { getEvents, getGateStatus, getMyRegistrations, getVolunteers, leaveWaitlist, setAuthToken } from "./lib/api";
 import { AdminPanel } from "./components/AdminPanel";
+import { EventBrowser } from "./components/EventBrowser";
 import { GateStatus } from "./components/GateStatus";
 import { HomePage } from "./components/HomePage";
 import { LoginPanel } from "./components/LoginPanel";
+import { MyTickets } from "./components/MyTickets";
 import { MyWaitlist } from "./components/MyWaitlist";
 import { OperationsSummary } from "./components/OperationsSummary";
 import { ScannerPanel } from "./components/ScannerPanel";
@@ -21,7 +23,8 @@ const workspaces = {
 };
 
 // How often to ask the server whether a seat has opened up. ET-07's in-app
-// notice depends on this, since there is no push channel.
+// notice depends on this, since there is no push channel. The same poll carries
+// "my tickets", so a promotion shows up in both places on the same tick.
 const WAITLIST_POLL_MS = 15000;
 
 function getStoredUser() {
@@ -49,6 +52,7 @@ function App() {
   const [scanResult, setScanResult] = useState(null);
   const [loadError, setLoadError] = useState("");
   const [myRegistrations, setMyRegistrations] = useState([]);
+  const [myTickets, setMyTickets] = useState([]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -100,7 +104,12 @@ function App() {
     const eventList = await getEvents();
     setEvents(eventList);
 
-    if (!eventId && eventList[0]) {
+    // Gates and stats need an event to be pointed at, so those workspaces fall
+    // back to the first one. An attendee does not: defaulting a selection here
+    // would open the register form on an event they never picked, which is the
+    // whole step this flow is trying to get them to choose deliberately.
+    const needsAnEvent = ["admin", "scanner"].includes(sessionUser.role);
+    if (needsAnEvent && !eventId && eventList[0]) {
       setSelectedEventId(eventList[0].id);
     }
 
@@ -138,14 +147,16 @@ function App() {
     }
   }, [selectedEventId, sessionUser]);
 
+  // An attendee lands on browsing, because registering is a choice between
+  // events rather than a form that defaults to the first one.
   function handleLogin(user) {
     setSessionUser(user);
-    setView("workspace");
+    setView(user.role === "user" ? "browse" : "workspace");
   }
 
   // ET-07: poll the caller's own queue places. This is what makes a position
-  // survive a reload, and what surfaces a promotion once ET-11's revocation has
-  // issued the ticket.
+  // survive a reload, what surfaces a promotion once ET-11's revocation has
+  // issued the ticket, and what keeps "my tickets" and the queue in step.
   const refreshMyRegistrations = useCallback(async () => {
     if (!sessionUser) {
       return;
@@ -153,6 +164,7 @@ function App() {
     try {
       const data = await getMyRegistrations();
       setMyRegistrations(data?.waitlist ?? []);
+      setMyTickets(data?.tickets ?? []);
     } catch {
       // A transient failure should not blank out a position the user can see.
     }
@@ -161,6 +173,7 @@ function App() {
   useEffect(() => {
     if (!sessionUser) {
       setMyRegistrations([]);
+      setMyTickets([]);
       return undefined;
     }
 
@@ -170,6 +183,7 @@ function App() {
         .then((data) => {
           if (isActive) {
             setMyRegistrations(data?.waitlist ?? []);
+            setMyTickets(data?.tickets ?? []);
           }
         })
         .catch(() => undefined);
@@ -189,13 +203,18 @@ function App() {
     await refreshMyRegistrations();
   }
 
-  function handleShowTicket(promotedTicket) {
-    setTicket(promotedTicket);
+  function handleShowTicket(chosenTicket) {
+    setTicket(chosenTicket);
   }
 
   function handleTicketIssued(issuedTicket) {
     setTicket(issuedTicket);
-    getEvents().then(setEvents).catch(() => undefined);
+    // Only a real issuance changes the seat counts. A waitlist join moves the
+    // card to "Join waitlist" only if the event was already full, which it is by
+    // definition at that point, so there is nothing to redraw.
+    if (issuedTicket.outcome !== "waitlisted") {
+      getEvents().then(setEvents).catch(() => undefined);
+    }
     refreshMyRegistrations();
   }
 
@@ -209,6 +228,7 @@ function App() {
     setGateStatus([]);
     setAllGateStatus([]);
     setMyRegistrations([]);
+    setMyTickets([]);
   }
 
   function handleLogout() {
@@ -223,7 +243,9 @@ function App() {
     }
 
     if (sessionUser?.role === role) {
-      setView("workspace");
+      // An attendee goes back to browsing rather than to a form that already has
+      // an event in it, so the choice stays theirs.
+      setView(role === "user" ? "browse" : "workspace");
       return;
     }
 
@@ -254,7 +276,11 @@ function App() {
     return <LoginPanel initialRole={requestedRole} onBack={() => setView("home")} onLogin={handleLogin} />;
   }
 
-  const selectedEvent = events.find((event) => event.id === Number(selectedEventId)) ?? events[0];
+  // The admin, scanner, and legacy user workspaces all need *an* event to be
+  // selected, so this one falls back to the first. Browsing must not, or the
+  // register form would open on an event nobody picked.
+  const chosenEvent = events.find((event) => event.id === Number(selectedEventId)) ?? null;
+  const selectedEvent = chosenEvent ?? events[0];
   const workspace = workspaces[sessionUser.role] ?? workspaces.user;
   const WorkspaceIcon = workspace.icon;
 
@@ -270,6 +296,17 @@ function App() {
             </h1>
           </div>
           <div className="top-action-buttons">
+            {workspace.id === "user" && (
+              <button
+                className="theme-toggle"
+                type="button"
+                onClick={() => setView("browse")}
+                aria-label="Browse events"
+                title="Browse events"
+              >
+                <Compass size={18} aria-hidden="true" />
+              </button>
+            )}
             <button className="theme-toggle" type="button" onClick={() => setView("home")} aria-label="Return to events" title="Events">
               <Home size={18} aria-hidden="true" />
             </button>
@@ -311,15 +348,62 @@ function App() {
 
       <OperationsSummary ticket={ticket} gates={allGateStatus} event={selectedEvent} />
 
-      {workspace.id === "user" && (
+      {workspace.id === "user" && view === "browse" && (
+        <section className="user-browse">
+          <EventBrowser
+            events={events}
+            isLoading={isLoadingEvents}
+            error={loadError}
+            myTickets={myTickets}
+            selectedEventId={selectedEventId}
+            onSelect={setSelectedEventId}
+          />
+
+          {chosenEvent && (
+            <div className="workspace-grid user-grid browse-registration">
+              <div className="left-stack">
+                <TicketIssuer
+                  events={events}
+                  event={chosenEvent}
+                  myTickets={myTickets}
+                  sessionUser={sessionUser}
+                  onEventChange={() => setSelectedEventId(null)}
+                  onShowTicket={handleShowTicket}
+                  onTicketIssued={handleTicketIssued}
+                />
+                <MyWaitlist
+                  entries={myRegistrations}
+                  onShowTicket={handleShowTicket}
+                  onLeave={handleLeaveWaitlist}
+                />
+                <MyTickets tickets={myTickets} onShowTicket={handleShowTicket} />
+              </div>
+              <div className="right-stack">
+                <TicketPreview ticket={ticket} />
+              </div>
+            </div>
+          )}
+        </section>
+      )}
+
+      {workspace.id === "user" && view === "workspace" && (
         <section className="workspace-grid user-grid">
           <div className="left-stack">
-            <TicketIssuer events={events} initialEventId={selectedEventId} onTicketIssued={handleTicketIssued} />
+            <TicketIssuer
+              events={events}
+              initialEventId={selectedEventId}
+              myTickets={myTickets}
+              sessionUser={sessionUser}
+              onEventChange={() => setView("browse")}
+              onShowTicket={handleShowTicket}
+              onTicketIssued={handleTicketIssued}
+            />
             <MyWaitlist
               entries={myRegistrations}
               onShowTicket={handleShowTicket}
               onLeave={handleLeaveWaitlist}
             />
+            <MyTickets tickets={myTickets} onShowTicket={handleShowTicket} />
           </div>
           <div className="right-stack">
             <TicketPreview ticket={ticket} />

@@ -2324,3 +2324,109 @@ dd {
     font-size: 1.35rem;
   }
 }
+
+/* Signed-in "Browse events" step. The cards themselves are the public
+   homepage's, so only the wrapper, the selected state, and the "my tickets"
+   list needed new rules. */
+
+.user-browse {
+  display: grid;
+  gap: 26px;
+  margin-bottom: 8px;
+}
+
+.user-browse .event-catalog {
+  margin: 0;
+}
+
+.event-card-selected {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--brand) 28%, transparent);
+}
+
+.browse-registration {
+  border-top: 1px solid var(--line);
+  padding-top: 24px;
+}
+
+.selected-event-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.held-tickets {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--success);
+  border-radius: 12px;
+  background: var(--success-soft);
+}
+
+.held-tickets p {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+.my-ticket-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 12px;
+}
+
+.my-ticket {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface-soft);
+}
+
+.my-ticket-copy {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.my-ticket-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+}
+
+.my-ticket-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  font-size: 0.86rem;
+  color: var(--muted);
+}
+
+.my-ticket-facts span {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+@media (max-width: 640px) {
+  .my-ticket {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .my-ticket .ghost-button {
+    justify-content: center;
+  }
+}
