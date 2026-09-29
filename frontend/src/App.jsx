@@ -430,6 +430,8 @@ function App() {
             }}
           />
 
+          <UserStats refreshKey={myTickets.length} />
+
           {chosenEvent && (
             <div className="workspace-grid user-grid browse-registration" ref={registrationSectionRef}>
               <div className="left-stack">
@@ -447,7 +449,6 @@ function App() {
                   onShowTicket={handleShowTicket}
                   onLeave={handleLeaveWaitlist}
                 />
-                <UserStats refreshKey={myTickets.length} />
                 <MyTickets tickets={myTickets} onShowTicket={handleShowTicket} />
               </div>
               <div className="right-stack">

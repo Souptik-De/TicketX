@@ -58,7 +58,15 @@ export function UserStats({ refreshKey }) {
   }
 
   if (error && !stats) {
-    return null;
+    return (
+      <div className="panel">
+        <div className="section-heading">
+          <p className="eyebrow">Your history</p>
+          <h2>My stats</h2>
+        </div>
+        <p className="error-text">{error}</p>
+      </div>
+    );
   }
 
   if (!stats || stats.total === 0) {

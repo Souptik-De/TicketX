@@ -62,7 +62,15 @@ export function ScannerStats({ refreshSignal }) {
   }
 
   if (error && !stats) {
-    return null;
+    return (
+      <div className="panel">
+        <div className="section-heading">
+          <p className="eyebrow">Your scanning</p>
+          <h2>My scans</h2>
+        </div>
+        <p className="error-text">{error}</p>
+      </div>
+    );
   }
 
   if (!stats || stats.total === 0) {
