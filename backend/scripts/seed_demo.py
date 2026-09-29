@@ -34,12 +34,14 @@ from backend.app.seed import (  # noqa: E402
 
 
 def report(db, title: str) -> None:
-    from backend.app.models import Attendee, Event, Ticket, User, WaitlistEntry
+    from backend.app.models import Attendee, Event, Gate, Scan, Ticket, User, WaitlistEntry
 
     print(f"\n{title}")
     print("-" * len(title))
     print(f"  events            {db.query(Event).count()}")
+    print(f"  gates             {db.query(Gate).count()}")
     print(f"  tickets           {db.query(Ticket).count()}")
+    print(f"  scans             {db.query(Scan).count()}")
     print(f"  waitlist entries  {db.query(WaitlistEntry).count()}")
     print(f"  attendees         {db.query(Attendee).count()}")
     print(f"  users             {db.query(User).count()}")
@@ -95,6 +97,8 @@ def main() -> int:
         report(db, "Demo data")
         print("\nSign in with:")
         print(f"    {DEMO_CREDENTIALS}")
+        print("\nOpen 'Freshers Showcase Night' as admin to see the event stats")
+        print("page: tier and gate breakdowns plus the check-in charts.")
         print("\nSign in as the standard 'attendee / attendee123' account as well to see")
         print("the cold-start path: the same row, with crowd-based reasons instead of")
         print("personal ones.")

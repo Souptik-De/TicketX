@@ -1,11 +1,12 @@
 from datetime import UTC, datetime, timedelta
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .auth import hash_password
-from .models import Attendee, Event, Gate, Ticket, User, Volunteer, WaitlistEntry
-from .schemas import TicketCreate
-from .services import issue_ticket
+from .models import Attendee, Event, Gate, Scan, Ticket, User, Volunteer, WaitlistEntry
+from .schemas import ScanCreate, TicketCreate
+from .services import issue_ticket, record_scan
 
 
 def seed_reference_data(db: Session) -> None:
@@ -147,6 +148,66 @@ DEMO_EVENTS = [
 DEMO_PAST_EVENT = ("Last Year's Fest", "Already happened. Kept so past events can be seen being excluded.", "Hall C")
 
 
+# ---------------------------------------------------------------------------
+# Stats showcase: one event with tickets across all tiers and check-ins
+# spread across its gates, so the admin event-stats page (metrics, tier and
+# gate tables, and the charts) has something real to show.
+# ---------------------------------------------------------------------------
+#
+# Seeded together with the demo dataset, behind the same TICKETX_SEED_DEMO
+# flag, and cleaned up by the same clear_demo_data (titles + DEMO- prefix),
+# so previews get the charts for free and production stays untouched.
+
+SHOWCASE_TITLE = "Freshers Showcase Night"
+SHOWCASE_DESCRIPTION = "A full house to click through: tiered tickets and gate check-ins for the event stats charts."
+SHOWCASE_VENUE = "Seminar Hall"
+SHOWCASE_CAPACITY = 250
+SHOWCASE_DAYS_FROM_NOW = 18
+
+SHOWCASE_GATES = [
+    ("Main Gate", "Auditorium front entrance", "Showcase Volunteer Main"),
+    ("VIP Gate", "Auditorium east entrance", "Showcase Volunteer VIP"),
+    ("Side Gate", "Canteen walkway", "Showcase Volunteer Side"),
+]
+
+# (attendee name, campus tag suffix, tier)
+SHOWCASE_TICKETS = [
+    ("Aarav Sharma", "SHOW01", "general"),
+    ("Diya Patel", "SHOW02", "general"),
+    ("Kabir Singh", "SHOW03", "general"),
+    ("Ananya Iyer", "SHOW04", "general"),
+    ("Vikram Rao", "SHOW05", "general"),
+    ("Sneha Kulkarni", "SHOW06", "general"),
+    ("Arjun Nair", "SHOW07", "general"),
+    ("Pooja Verma", "SHOW08", "general"),
+    ("Riya Sen", "SHOW09", "premium"),
+    ("Aditya Mehta", "SHOW10", "premium"),
+    ("Ishita Bose", "SHOW11", "premium"),
+    ("Rohan Gupta", "SHOW12", "premium"),
+    ("Neha Joshi", "SHOW13", "premium"),
+    ("Souptik De", "SHOW14", "vip"),
+    ("Aparna Dutta", "SHOW15", "vip"),
+    ("Soumyadip Das", "SHOW16", "vip"),
+]
+
+# (ticket index into SHOWCASE_TICKETS, gate index into SHOWCASE_GATES).
+# Eleven of sixteen checked in, so the donut, tier bars, and gate bars move
+# while five tickets stay outside.
+SHOWCASE_SCANS = [
+    (0, 0),
+    (1, 0),
+    (2, 0),
+    (4, 0),
+    (8, 0),
+    (9, 1),
+    (10, 1),
+    (13, 0),
+    (14, 1),
+    (6, 2),
+    (7, 2),
+]
+
+
 def demo_data_exists(db: Session) -> bool:
     return db.query(Event).filter(Event.title == DEMO_MARKER_TITLE).first() is not None
 
@@ -158,12 +219,24 @@ def clear_demo_data(db: Session) -> None:
     real attendees, and real accounts are never touched even though they live in
     the same tables.
     """
-    titles = [row[0] for row in DEMO_EVENTS] + [DEMO_PAST_EVENT[0]]
+    titles = [row[0] for row in DEMO_EVENTS] + [DEMO_PAST_EVENT[0], SHOWCASE_TITLE]
     events = db.query(Event).filter(Event.title.in_(titles)).all()
     event_ids = [event.id for event in events]
 
+    # Demo attendees can also hold tickets outside the demo events (the demo
+    # account books the reference fest), so scope ticket cleanup by attendee
+    # too. Otherwise a rebuild reuses row ids and trips the duplicate guard.
+    demo_attendee_ids = select(Attendee.id).where(Attendee.campus_id.like(f"{DEMO_CAMPUS_PREFIX}%"))
+    demo_ticket_ids = select(Ticket.id).where(
+        Ticket.event_id.in_(event_ids) | Ticket.attendee_id.in_(demo_attendee_ids)
+    )
+    showcase_gate_ids = select(Gate.id).where(Gate.event_id.in_(event_ids))
+
+    db.query(Scan).filter(Scan.ticket_id.in_(demo_ticket_ids)).delete(synchronize_session=False)
     db.query(WaitlistEntry).filter(WaitlistEntry.event_id.in_(event_ids)).delete(synchronize_session=False)
-    db.query(Ticket).filter(Ticket.event_id.in_(event_ids)).delete(synchronize_session=False)
+    db.query(Ticket).filter(Ticket.id.in_(demo_ticket_ids)).delete(synchronize_session=False)
+    db.query(Volunteer).filter(Volunteer.gate_id.in_(showcase_gate_ids)).delete(synchronize_session=False)
+    db.query(Gate).filter(Gate.id.in_(showcase_gate_ids)).delete(synchronize_session=False)
     db.query(Attendee).filter(Attendee.campus_id.like(f"{DEMO_CAMPUS_PREFIX}%")).delete(synchronize_session=False)
 
     for event in events:
@@ -191,6 +264,67 @@ def _book(db: Session, event: Event, name: str, campus: str, *, tier: str = "gen
         ),
         user_id=user_id,
     )
+
+
+def seed_stats_showcase(db: Session, now) -> dict:
+    """Seed the stats/charts showcase event. Idempotent without ``force``."""
+    if db.query(Event).filter(Event.title == SHOWCASE_TITLE).first() is not None:
+        return {"seeded": False, "reason": "already present"}
+
+    event = Event(
+        title=SHOWCASE_TITLE,
+        description=SHOWCASE_DESCRIPTION,
+        date_time=now + timedelta(days=SHOWCASE_DAYS_FROM_NOW),
+        venue=SHOWCASE_VENUE,
+        capacity=SHOWCASE_CAPACITY,
+    )
+    db.add(event)
+    db.flush()
+
+    gates: list[Gate] = []
+    volunteers: list[Volunteer] = []
+    for gate_name, location, volunteer_name in SHOWCASE_GATES:
+        gate = Gate(name=gate_name, location=location, event_id=event.id)
+        db.add(gate)
+        db.flush()
+        volunteer = Volunteer(name=volunteer_name, gate_id=gate.id)
+        db.add(volunteer)
+        gates.append(gate)
+        volunteers.append(volunteer)
+    db.flush()
+
+    tickets: list[Ticket] = []
+    for name, tag, tier in SHOWCASE_TICKETS:
+        campus = demo_attendee_campus(tag)
+        issued = issue_ticket(
+            db,
+            TicketCreate(
+                event_id=event.id,
+                attendee_name=name,
+                attendee_contact=f"{campus.lower()}@example.edu",
+                campus_id=campus,
+                tier=tier,
+            ),
+        )
+        if isinstance(issued, Ticket):
+            tickets.append(issued)
+    db.flush()
+
+    checked = 0
+    for ticket_index, gate_index in SHOWCASE_SCANS:
+        if ticket_index < len(tickets) and gate_index < len(gates):
+            record_scan(
+                db,
+                ScanCreate(
+                    ticket_id=tickets[ticket_index].id,
+                    gate_id=gates[gate_index].id,
+                    volunteer_id=volunteers[gate_index].id,
+                ),
+            )
+            checked += 1
+    db.commit()
+
+    return {"seeded": True, "event": event.title, "issued": len(tickets), "checked_in": checked}
 
 
 def seed_demo_data(db: Session, *, force: bool = False) -> dict:
@@ -272,9 +406,12 @@ def seed_demo_data(db: Session, *, force: bool = False) -> dict:
         _book(db, events["Neon Nights Showcase"], f"Neon {tag}", demo_attendee_campus(tag))
     _book(db, events["Neon Nights Showcase"], "Too Late", demo_attendee_campus("NEONWAIT"))
 
+    showcase = seed_stats_showcase(db, now)
+
     return {
         "seeded": True,
         "credentials": DEMO_CREDENTIALS,
-        "events": len(DEMO_EVENTS) + 1,
+        "events": len(DEMO_EVENTS) + 2,
+        "showcase": showcase,
         "reason": None,
     }
