@@ -224,6 +224,7 @@ class ScanResult(BaseModel):
     attendee_name: str | None = None
     tier: str | None = None
     seat_number: str | None = None
+    scanned_at: datetime | None = None
     prior_scan: PriorScan | None = None
 
 

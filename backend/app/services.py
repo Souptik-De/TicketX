@@ -483,6 +483,7 @@ def record_scan(db: Session, payload: ScanCreate) -> ScanResult:
         scan = Scan(ticket_id=ticket.id, gate_id=gate.id, volunteer_id=volunteer.id, result="invalid")
         db.add(scan)
         db.commit()
+        db.refresh(scan)
         return ScanResult(
             result="invalid",
             message="Ticket does not belong to this gate's event.",
@@ -490,12 +491,14 @@ def record_scan(db: Session, payload: ScanCreate) -> ScanResult:
             attendee_name=ticket.attendee.name,
             tier=ticket.tier,
             seat_number=ticket.seat_number,
+            scanned_at=scan.timestamp,
         )
 
     if ticket.status == "revoked":
         scan = Scan(ticket_id=ticket.id, gate_id=gate.id, volunteer_id=volunteer.id, result="invalid")
         db.add(scan)
         db.commit()
+        db.refresh(scan)
         return ScanResult(
             result="invalid",
             message="Ticket has been revoked.",
@@ -503,6 +506,7 @@ def record_scan(db: Session, payload: ScanCreate) -> ScanResult:
             attendee_name=ticket.attendee.name,
             tier=ticket.tier,
             seat_number=ticket.seat_number,
+            scanned_at=scan.timestamp,
         )
 
     prior_valid_scan = (
@@ -516,6 +520,7 @@ def record_scan(db: Session, payload: ScanCreate) -> ScanResult:
         duplicate = Scan(ticket_id=ticket.id, gate_id=gate.id, volunteer_id=volunteer.id, result="duplicate")
         db.add(duplicate)
         db.commit()
+        db.refresh(duplicate)
         return ScanResult(
             result="duplicate",
             message=f"Already used at {prior_valid_scan.gate.name}.",
@@ -523,6 +528,7 @@ def record_scan(db: Session, payload: ScanCreate) -> ScanResult:
             attendee_name=ticket.attendee.name,
             tier=ticket.tier,
             seat_number=ticket.seat_number,
+            scanned_at=duplicate.timestamp,
             prior_scan=PriorScan(gate_name=prior_valid_scan.gate.name, timestamp=prior_valid_scan.timestamp),
         )
 
@@ -530,6 +536,7 @@ def record_scan(db: Session, payload: ScanCreate) -> ScanResult:
     scan = Scan(ticket_id=ticket.id, gate_id=gate.id, volunteer_id=volunteer.id, result="valid")
     db.add(scan)
     db.commit()
+    db.refresh(scan)
     return ScanResult(
         result="valid",
         message="Ticket accepted. Welcome in.",
@@ -537,6 +544,7 @@ def record_scan(db: Session, payload: ScanCreate) -> ScanResult:
         attendee_name=ticket.attendee.name,
         tier=ticket.tier,
         seat_number=ticket.seat_number,
+        scanned_at=scan.timestamp,
     )
 
 

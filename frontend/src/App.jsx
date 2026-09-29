@@ -49,6 +49,7 @@ function App() {
   const [view, setView] = useState("home");
   const [requestedRole, setRequestedRole] = useState("user");
   const [selectedEventId, setSelectedEventId] = useState(null);
+  const registrationSectionRef = useRef(null);
   const [events, setEvents] = useState([]);
   const [isLoadingEvents, setIsLoadingEvents] = useState(true);
   const [volunteers, setVolunteers] = useState([]);
@@ -404,7 +405,12 @@ function App() {
             suggestions={suggestions}
             myTickets={myTickets}
             selectedEventId={selectedEventId}
-            onSelect={setSelectedEventId}
+            onSelect={(eventId) => {
+              setSelectedEventId(eventId);
+              setTimeout(() => {
+                registrationSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+              }, 50);
+            }}
           />
 
           <EventBrowser
@@ -413,11 +419,17 @@ function App() {
             error={loadError}
             myTickets={myTickets}
             selectedEventId={selectedEventId}
-            onSelect={setSelectedEventId}
+            onSelect={(eventId) => {
+              setSelectedEventId(eventId);
+              // Scroll to Step 2 after React renders the registration section
+              setTimeout(() => {
+                registrationSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+              }, 50);
+            }}
           />
 
           {chosenEvent && (
-            <div className="workspace-grid user-grid browse-registration">
+            <div className="workspace-grid user-grid browse-registration" ref={registrationSectionRef}>
               <div className="left-stack">
                 <TicketIssuer
                   events={events}

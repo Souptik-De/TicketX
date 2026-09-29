@@ -1,5 +1,13 @@
 import { AlertTriangle, CheckCircle2, XCircle } from "lucide-react";
 
+const fmtTime = (iso) =>
+  new Date(iso.endsWith("Z") ? iso : iso + "Z").toLocaleTimeString("en-IN", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    timeZone: "Asia/Kolkata",
+  });
+
 export function ScanResultCard({ result }) {
   if (!result) {
     return (
@@ -35,11 +43,17 @@ export function ScanResultCard({ result }) {
             <dt>Seat</dt>
             <dd>{result.seat_number}</dd>
           </div>
+          {result.scanned_at && (
+            <div>
+              <dt>Scanned at</dt>
+              <dd>{fmtTime(result.scanned_at)}</dd>
+            </div>
+          )}
           {result.prior_scan && (
             <div>
               <dt>First scan</dt>
               <dd>
-                {result.prior_scan.gate_name}, {new Date(result.prior_scan.timestamp).toLocaleTimeString()}
+                {result.prior_scan.gate_name}, {fmtTime(result.prior_scan.timestamp)}
               </dd>
             </div>
           )}
