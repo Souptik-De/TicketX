@@ -114,6 +114,8 @@ This runs the FastAPI contract tests and verifies that the React app builds.
 | ET-02, ET-03 | `POST /scans` | Validate a ticket QR or ticket ID at a gate. |
 | ET-04 | `GET /gates/status` | Return live scan counts and last synced time by gate. |
 | ET-07 | `GET /me/registrations` | Return the caller's own waitlist places, with live position and any ticket issued by a promotion, plus the tickets they currently hold. |
+| User | `GET /me/ticket-stats` | Return the caller's ticket totals, tier split, and per-ticket check-in gate. |
+| Scanner | `GET /me/scans` | Return the caller's scan totals, per-gate counts, and recent scan history. |
 | ET-07 | `DELETE /me/waitlist/{entry_id}` | Withdraw from a waitlist and close the gap in the queue. |
 | ET-07 | `GET /events/{id}/waitlist` | Return an event's waiting attendees, admin only. |
 | Admin | `GET /events/{id}/stats` | Return per-event attendance, check-in, waitlist, and recently promoted rows. |

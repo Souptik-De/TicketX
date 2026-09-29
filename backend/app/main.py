@@ -28,6 +28,8 @@ from .schemas import (
     LoginRequest,
     LoginResponse,
     MyRegistrations,
+    MyScanStats,
+    MyTicketStats,
     RegisterRequest,
     ScanCreate,
     ScanResult,
@@ -50,6 +52,8 @@ from .services import (
     get_event_stats,
     get_gate_status,
     get_my_registrations,
+    get_my_scan_stats,
+    get_my_ticket_stats,
     get_or_create_google_user,
     issue_ticket,
     leave_waitlist,
@@ -450,10 +454,26 @@ def _refresh_suggestion_copy(
 @app.post("/scans", response_model=ScanResult)
 def scan_ticket(
     payload: ScanCreate,
-    _: User = Depends(require_roles("scanner")),
+    current_user: User = Depends(require_roles("scanner")),
     db: Session = Depends(get_db),
 ) -> ScanResult:
-    return record_scan(db, payload)
+    return record_scan(db, payload, user_id=current_user.id)
+
+
+@app.get("/me/scans", response_model=MyScanStats)
+def my_scans(
+    current_user: User = Depends(require_roles("scanner")),
+    db: Session = Depends(get_db),
+) -> MyScanStats:
+    return get_my_scan_stats(db, current_user)
+
+
+@app.get("/me/ticket-stats", response_model=MyTicketStats)
+def my_ticket_stats(
+    current_user: User = Depends(require_roles("user")),
+    db: Session = Depends(get_db),
+) -> MyTicketStats:
+    return get_my_ticket_stats(db, current_user)
 
 
 @app.get("/gates/status", response_model=list[GateStatus])

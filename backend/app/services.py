@@ -17,6 +17,12 @@ from .schemas import (
     GateCreate,
     GateStatus,
     MyRegistrations,
+    MyScanGate,
+    MyScanItem,
+    MyScanStats,
+    MyTicketStatItem,
+    MyTicketStats,
+    MyTicketTier,
     MyWaitlistEntry,
     PriorScan,
     PromotedAttendeeInfo,
@@ -416,6 +422,130 @@ def _my_tickets(db: Session, user: User) -> list[TicketDetail]:
     return [_ticket_detail(ticket) for ticket in tickets]
 
 
+def get_my_ticket_stats(db: Session, user: User) -> MyTicketStats:
+    tickets = (
+        db.query(Ticket)
+        .options(joinedload(Ticket.event), joinedload(Ticket.attendee))
+        .filter(Ticket.user_id == user.id, Ticket.status != "revoked")
+        .order_by(Ticket.issued_at.desc(), Ticket.id.desc())
+        .all()
+    )
+    ticket_ids = [ticket.id for ticket in tickets]
+
+    first_valid_scan: dict[int, Scan] = {}
+    if ticket_ids:
+        valid_scans = (
+            db.query(Scan)
+            .options(joinedload(Scan.gate))
+            .filter(Scan.ticket_id.in_(ticket_ids), Scan.result == "valid")
+            .order_by(Scan.timestamp.asc())
+            .all()
+        )
+        for scan in valid_scans:
+            if scan.ticket_id not in first_valid_scan:
+                first_valid_scan[scan.ticket_id] = scan
+
+    tier_counts: dict[str, int] = {}
+    rows: list[MyTicketStatItem] = []
+    used = 0
+    for ticket in tickets:
+        tier_key = (ticket.tier or "general").lower()
+        tier_counts[tier_key] = tier_counts.get(tier_key, 0) + 1
+
+        scan = first_valid_scan.get(ticket.id)
+        is_used = ticket.status == "used" or scan is not None
+        if is_used:
+            used += 1
+
+        rows.append(
+            MyTicketStatItem(
+                ticket_id=ticket.id,
+                event_title=ticket.event.title if ticket.event else "",
+                event_date_time=ticket.event.date_time if ticket.event else ticket.issued_at,
+                venue=ticket.event.venue if ticket.event else "",
+                tier=ticket.tier,
+                seat_number=ticket.seat_number or "",
+                status=ticket.status,
+                checked_in=is_used,
+                check_gate_name=scan.gate.name if scan and scan.gate else None,
+                checked_at=scan.timestamp if scan else None,
+            )
+        )
+
+    waitlisted = (
+        db.query(WaitlistEntry)
+        .filter(WaitlistEntry.user_id == user.id, WaitlistEntry.status == "waiting")
+        .count()
+    )
+
+    return MyTicketStats(
+        total=len(tickets),
+        used=used,
+        valid=len(tickets) - used,
+        waitlisted=waitlisted,
+        tiers=[MyTicketTier(tier=tier, count=count) for tier, count in sorted(tier_counts.items())],
+        tickets=rows,
+    )
+
+
+def get_my_scan_stats(db: Session, user: User) -> MyScanStats:
+    scans = (
+        db.query(Scan)
+        .options(
+            joinedload(Scan.ticket).joinedload(Ticket.attendee),
+            joinedload(Scan.gate),
+            joinedload(Scan.ticket).joinedload(Ticket.event),
+        )
+        .filter(Scan.user_id == user.id)
+        .order_by(Scan.timestamp.desc(), Scan.id.desc())
+        .all()
+    )
+
+    valid = sum(1 for scan in scans if scan.result == "valid")
+    duplicate = sum(1 for scan in scans if scan.result == "duplicate")
+    invalid = sum(1 for scan in scans if scan.result not in ("valid", "duplicate"))
+
+    gate_counts: dict[int, dict] = {}
+    for scan in scans:
+        if scan.result != "valid":
+            continue
+        entry = gate_counts.get(scan.gate_id)
+        if entry is None:
+            gate_counts[scan.gate_id] = {
+                "gate_id": scan.gate_id,
+                "name": scan.gate.name if scan.gate else "",
+                "location": scan.gate.location if scan.gate else "",
+                "scanned_count": 1,
+            }
+        else:
+            entry["scanned_count"] += 1
+
+    recent = [
+        MyScanItem(
+            scan_id=scan.id,
+            timestamp=scan.timestamp,
+            result=scan.result,
+            ticket_id=scan.ticket_id,
+            attendee_name=scan.ticket.attendee.name if scan.ticket and scan.ticket.attendee else "",
+            tier=scan.ticket.tier if scan.ticket else "",
+            seat_number=scan.ticket.seat_number if scan.ticket else "",
+            gate_name=scan.gate.name if scan.gate else "",
+            gate_location=scan.gate.location if scan.gate else "",
+            event_title=scan.ticket.event.title if scan.ticket and scan.ticket.event else "",
+        )
+        for scan in scans[:25]
+    ]
+
+    return MyScanStats(
+        total=len(scans),
+        valid=valid,
+        duplicate=duplicate,
+        invalid=invalid,
+        gates=[MyScanGate(**entry) for entry in sorted(gate_counts.values(), key=lambda item: item["name"])],
+        recent=recent,
+    )
+
+
 def revoke_ticket(db: Session, ticket_id: int) -> Ticket:
     ticket = db.get(Ticket, ticket_id)
     if ticket is None:
@@ -462,7 +592,7 @@ def find_ticket_by_scan_payload(db: Session, payload: ScanCreate) -> Ticket | No
     )
 
 
-def record_scan(db: Session, payload: ScanCreate) -> ScanResult:
+def record_scan(db: Session, payload: ScanCreate, user_id: int | None = None) -> ScanResult:
     gate = db.get(Gate, payload.gate_id)
     volunteer = db.get(Volunteer, payload.volunteer_id)
 
@@ -480,7 +610,7 @@ def record_scan(db: Session, payload: ScanCreate) -> ScanResult:
         return ScanResult(result="invalid", message="QR signature could not be verified.")
 
     if gate.event_id is not None and ticket.event_id != gate.event_id:
-        scan = Scan(ticket_id=ticket.id, gate_id=gate.id, volunteer_id=volunteer.id, result="invalid")
+        scan = Scan(ticket_id=ticket.id, gate_id=gate.id, volunteer_id=volunteer.id, result="invalid", user_id=user_id)
         db.add(scan)
         db.commit()
         db.refresh(scan)
@@ -495,7 +625,7 @@ def record_scan(db: Session, payload: ScanCreate) -> ScanResult:
         )
 
     if ticket.status == "revoked":
-        scan = Scan(ticket_id=ticket.id, gate_id=gate.id, volunteer_id=volunteer.id, result="invalid")
+        scan = Scan(ticket_id=ticket.id, gate_id=gate.id, volunteer_id=volunteer.id, result="invalid", user_id=user_id)
         db.add(scan)
         db.commit()
         db.refresh(scan)
@@ -517,7 +647,7 @@ def record_scan(db: Session, payload: ScanCreate) -> ScanResult:
         .first()
     )
     if prior_valid_scan is not None:
-        duplicate = Scan(ticket_id=ticket.id, gate_id=gate.id, volunteer_id=volunteer.id, result="duplicate")
+        duplicate = Scan(ticket_id=ticket.id, gate_id=gate.id, volunteer_id=volunteer.id, result="duplicate", user_id=user_id)
         db.add(duplicate)
         db.commit()
         db.refresh(duplicate)
@@ -533,7 +663,7 @@ def record_scan(db: Session, payload: ScanCreate) -> ScanResult:
         )
 
     ticket.status = "used"
-    scan = Scan(ticket_id=ticket.id, gate_id=gate.id, volunteer_id=volunteer.id, result="valid")
+    scan = Scan(ticket_id=ticket.id, gate_id=gate.id, volunteer_id=volunteer.id, result="valid", user_id=user_id)
     db.add(scan)
     db.commit()
     db.refresh(scan)

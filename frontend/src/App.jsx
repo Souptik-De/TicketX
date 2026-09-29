@@ -12,10 +12,12 @@ import { MyWaitlist } from "./components/MyWaitlist";
 import { OperationsSummary } from "./components/OperationsSummary";
 import { ScannerPanel } from "./components/ScannerPanel";
 import { ScanResultCard } from "./components/ScanResultCard";
+import { ScannerStats } from "./components/ScannerStats";
 import { SuggestedEvents } from "./components/SuggestedEvents";
 import { TicketIssuer } from "./components/TicketIssuer";
 import { TicketPreview } from "./components/TicketPreview";
 import { TicketXLogo } from "./components/TicketXLogo";
+import { UserStats } from "./components/UserStats";
 
 const workspaces = {
   user: { id: "user", label: "User workspace", icon: UserRound },
@@ -445,6 +447,7 @@ function App() {
                   onShowTicket={handleShowTicket}
                   onLeave={handleLeaveWaitlist}
                 />
+                <UserStats refreshKey={myTickets.length} />
                 <MyTickets tickets={myTickets} onShowTicket={handleShowTicket} />
               </div>
               <div className="right-stack">
@@ -472,6 +475,7 @@ function App() {
               onShowTicket={handleShowTicket}
               onLeave={handleLeaveWaitlist}
             />
+            <UserStats refreshKey={myTickets.length} />
             <MyTickets tickets={myTickets} onShowTicket={handleShowTicket} />
           </div>
           <div className="right-stack">
@@ -513,6 +517,7 @@ function App() {
           </div>
           <div className="right-stack">
             <ScanResultCard result={scanResult} />
+            <ScannerStats refreshSignal={scanResult} />
             <GateStatus gates={gateStatus} onRefresh={() => refreshGateStatus()} />
           </div>
         </section>

@@ -18,6 +18,7 @@ class User(Base):
     email: Mapped[str | None] = mapped_column(String(160), nullable=True, index=True)
 
     waitlist_entries: Mapped[list["WaitlistEntry"]] = relationship(back_populates="user")
+    scans: Mapped[list["Scan"]] = relationship(back_populates="user")
 
 
 class Attendee(Base):
@@ -179,7 +180,9 @@ class Scan(Base):
     ticket_id: Mapped[int] = mapped_column(ForeignKey("tickets.ticket_id"), nullable=False)
     gate_id: Mapped[int] = mapped_column(ForeignKey("gates.gate_id"), nullable=False)
     volunteer_id: Mapped[int] = mapped_column(ForeignKey("volunteers.volunteer_id"), nullable=False)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.user_id"), nullable=True, index=True)
 
     ticket: Mapped[Ticket] = relationship(back_populates="scans")
     gate: Mapped[Gate] = relationship(back_populates="scans")
     volunteer: Mapped[Volunteer] = relationship(back_populates="scans")
+    user: Mapped[User | None] = relationship(back_populates="scans")

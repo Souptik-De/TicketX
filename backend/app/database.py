@@ -66,6 +66,14 @@ def migrate_existing_database() -> None:
             if "event_id" not in gate_columns:
                 connection.execute(text("ALTER TABLE gates ADD COLUMN event_id INTEGER"))
 
+        if "scans" in tables:
+            scan_columns = {column["name"] for column in inspector.get_columns("scans")}
+            if "user_id" not in scan_columns:
+                connection.execute(text("ALTER TABLE scans ADD COLUMN user_id INTEGER"))
+
+            connection.execute(
+                text("CREATE INDEX IF NOT EXISTS ix_scans_user_id ON scans (user_id)")
+            )
         if "events" in tables:
             event_columns = {column["name"] for column in inspector.get_columns("events")}
             if "description" not in event_columns:

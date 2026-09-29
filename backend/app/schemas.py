@@ -228,6 +228,62 @@ class ScanResult(BaseModel):
     prior_scan: PriorScan | None = None
 
 
+class MyScanItem(BaseModel):
+    scan_id: int
+    timestamp: datetime
+    result: str
+    ticket_id: int
+    attendee_name: str
+    tier: str
+    seat_number: str
+    gate_name: str
+    gate_location: str
+    event_title: str
+
+
+class MyScanGate(BaseModel):
+    gate_id: int
+    name: str
+    location: str
+    scanned_count: int
+
+
+class MyScanStats(BaseModel):
+    total: int
+    valid: int
+    duplicate: int
+    invalid: int
+    gates: list[MyScanGate]
+    recent: list[MyScanItem]
+
+
+class MyTicketStatItem(BaseModel):
+    ticket_id: int
+    event_title: str
+    event_date_time: datetime
+    venue: str
+    tier: str
+    seat_number: str
+    status: str
+    checked_in: bool
+    check_gate_name: str | None = None
+    checked_at: datetime | None = None
+
+
+class MyTicketTier(BaseModel):
+    tier: str
+    count: int
+
+
+class MyTicketStats(BaseModel):
+    total: int
+    used: int
+    valid: int
+    waitlisted: int
+    tiers: list[MyTicketTier]
+    tickets: list[MyTicketStatItem]
+
+
 class GateStatus(BaseModel):
     gate_id: int
     event_id: int | None

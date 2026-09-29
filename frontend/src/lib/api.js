@@ -127,6 +127,14 @@ export function getMyRegistrations() {
   return request("/me/registrations");
 }
 
+export function getMyTicketStats() {
+  return request("/me/ticket-stats");
+}
+
+export function getMyScans() {
+  return request("/me/scans");
+}
+
 export function leaveWaitlist(entryId) {
   return request(`/me/waitlist/${entryId}`, {
     method: "DELETE",

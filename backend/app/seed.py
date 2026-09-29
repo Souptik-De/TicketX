@@ -311,6 +311,8 @@ def seed_stats_showcase(db: Session, now) -> dict:
     db.flush()
 
     checked = 0
+    scanner = db.query(User).filter(User.username == "scanner").one_or_none()
+    scanner_id = scanner.id if scanner is not None else None
     for ticket_index, gate_index in SHOWCASE_SCANS:
         if ticket_index < len(tickets) and gate_index < len(gates):
             record_scan(
@@ -320,6 +322,7 @@ def seed_stats_showcase(db: Session, now) -> dict:
                     gate_id=gates[gate_index].id,
                     volunteer_id=volunteers[gate_index].id,
                 ),
+                user_id=scanner_id,
             )
             checked += 1
     db.commit()

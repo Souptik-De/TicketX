@@ -1611,6 +1611,10 @@ dd {
   width: 100%;
 }
 
+.chart-box-sm {
+  height: 200px;
+}
+
 .chart-span {
   grid-column: 1 / -1;
 }
@@ -1731,6 +1735,18 @@ dd {
   color: #ef4444;
   background: rgba(239, 68, 68, 0.12);
   border-color: color-mix(in srgb, #ef4444 40%, transparent);
+}
+
+.status-pill.dup {
+  color: var(--warning);
+  background: var(--warning-soft);
+  border-color: color-mix(in srgb, var(--warning) 40%, transparent);
+}
+
+.status-pill.bad {
+  color: var(--danger);
+  background: var(--danger-soft);
+  border-color: color-mix(in srgb, var(--danger) 40%, transparent);
 }
 
 
