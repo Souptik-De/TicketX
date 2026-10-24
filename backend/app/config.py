@@ -52,6 +52,31 @@ def get_groq_timeout() -> float:
     return value if 0 < value <= 60 else 8.0
 
 
+# --- Seat holds -----------------------------------------------------------
+
+#: Fallback lifetime of a seat hold. Ten minutes is long enough to fill in the
+#: attendee details and short enough that abandoned carts return to sale.
+DEFAULT_SEAT_HOLD_SECONDS = 600
+
+#: Upper bound on the seats one booking may claim. The same cap applies to a
+#: hold and to the tickets it becomes, so one request can never take more.
+MAX_SEATS_PER_BOOKING = 6
+
+
+def get_seat_hold_seconds() -> int:
+    """Hold lifetime in seconds, read per call so a restart is enough to change it."""
+    raw = os.getenv("SEAT_HOLD_SECONDS", "").strip()
+    if not raw:
+        return DEFAULT_SEAT_HOLD_SECONDS
+    try:
+        value = int(raw)
+    except ValueError:
+        return DEFAULT_SEAT_HOLD_SECONDS
+    # A zero or negative window would expire every hold on creation, and an
+    # hour-long one would hold a seat hostage; fall back rather than honour them.
+    return value if 0 < value <= 3600 else DEFAULT_SEAT_HOLD_SECONDS
+
+
 #: Values accepted as "on" for TICKETX_SEED_DEMO. Anything else, including unset,
 #: leaves the demo seed off -- so a production deployment has to opt in.
 _TRUTHY = frozenset({"1", "true", "yes", "on"})

@@ -260,6 +260,51 @@ class PromotedAttendeeInfo(BaseModel):
     tier: str
 
 
+class HoldCreate(BaseModel):
+    """Seats to claim. The 1..6 rule is enforced in ``create_hold`` so a bad
+    count is a 400 with a readable message rather than a Pydantic 422."""
+
+    seat_ids: list[int]
+
+
+class HeldSeatOut(BaseModel):
+    id: int
+    label: str
+    tier_name: str
+
+
+class HoldOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    hold_id: int
+    event_id: int
+    status: str
+    seconds_remaining: int
+    # Populated while the hold is active, and on the cancel response for the
+    # seats it just released. Empty once the link is gone, because a released
+    # seat keeps no record of the hold it used to belong to.
+    seats: list[HeldSeatOut] = Field(default_factory=list)
+
+
+class ConfirmHoldIn(BaseModel):
+    attendee_name: str = Field(min_length=2, max_length=120)
+    attendee_contact: EmailStr
+    campus_id: str | None = Field(default=None, max_length=80)
+
+
+class ConfirmHoldOut(BaseModel):
+    hold_id: int
+    status: str
+    tickets: list[TicketDetail] = Field(default_factory=list)
+
+
+class EventWaitlistIn(BaseModel):
+    attendee_name: str = Field(min_length=2, max_length=120)
+    attendee_contact: EmailStr
+    campus_id: str | None = Field(default=None, max_length=80)
+
+
+
 class RevokeTicketResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

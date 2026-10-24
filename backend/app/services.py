@@ -1,14 +1,17 @@
 import csv
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 import io
 
 from fastapi import HTTPException, status
-from sqlalchemy import func
+from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload, subqueryload
 
+from .config import MAX_SEATS_PER_BOOKING, get_seat_hold_seconds
 from .models import Attendee, Event, Gate, Scan, Seat, SeatHold, Ticket, User, Volunteer, WaitlistEntry
 from .schemas import (
     AttendeeOut,
+    ConfirmHoldOut,
     EventCreate,
     EventOut,
     EventStatsGate,
@@ -18,6 +21,8 @@ from .schemas import (
     EventTierOut,
     GateCreate,
     GateStatus,
+    HeldSeatOut,
+    HoldOut,
     MyRegistrations,
     MyScanGate,
     MyScanItem,
@@ -43,6 +48,16 @@ from .security import sign_ticket, ticket_id_from_signature
 
 
 TIER_PREFIXES = {"general": "GEN", "premium": "PRE", "vip": "VIP"}
+
+
+class _HoldNotClaimed(Exception):
+    """Internal: the conditional UPDATE lost a race with confirm/expire/cancel."""
+
+
+def _utcnow() -> datetime:
+    """Naive UTC, the storage convention used everywhere else in this module."""
+    return datetime.now(UTC).replace(tzinfo=None)
+
 
 
 def _get_or_create_attendee(
@@ -283,8 +298,12 @@ def list_events(db: Session) -> list[EventOut]:
     return [_event_out(db, event, summaries.get(event.id, [])) for event in events]
 
 
-def build_seat_map(db: Session, event_id: int, user_id: int | None) -> SeatMapOut:
-    """Derive every seat's state from blocked flags, tickets, and active holds."""
+def _seat_map_event(db: Session, event_id: int) -> Event:
+    """Load an event and insist it has a seat map.
+
+    Every seat-level endpoint answers the same way for a legacy event, so the
+    409 message lives here rather than being repeated at each call site.
+    """
     event = db.get(Event, event_id)
     if event is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
@@ -293,9 +312,20 @@ def build_seat_map(db: Session, event_id: int, user_id: int | None) -> SeatMapOu
             status_code=status.HTTP_409_CONFLICT,
             detail="this event has no seat map",
         )
+    return event
 
-    release_expired_holds(db, event_id)
 
+def _seat_states(
+    db: Session,
+    event_id: int,
+) -> tuple[list[Seat], set[int], dict[int, int]]:
+    """Seats plus the two things that make one unavailable.
+
+    Returns the seats in map order, the ids of seats a live ticket points at,
+    and ``{hold_id: user_id}`` for holds that have not expired. One query per
+    fact, so the map, the availability checks and the auto-assign picker all
+    share it instead of each inventing its own definition of "free".
+    """
     seats = (
         db.query(Seat)
         .filter(Seat.event_id == event_id)
@@ -316,7 +346,7 @@ def build_seat_map(db: Session, event_id: int, user_id: int | None) -> SeatMapOu
         )
     }
 
-    now = datetime.now(UTC).replace(tzinfo=None)
+    now = _utcnow()
     active_holds = {
         hold_id: hold_user_id
         for hold_id, hold_user_id in (
@@ -329,6 +359,60 @@ def build_seat_map(db: Session, event_id: int, user_id: int | None) -> SeatMapOu
             .all()
         )
     }
+    return seats, booked_ids, active_holds
+
+
+def _available_seats(db: Session, event_id: int, tier_name: str | None = None) -> list[Seat]:
+    """Free, sellable seats in map order, optionally narrowed to one tier."""
+    seats, booked_ids, active_holds = _seat_states(db, event_id)
+    wanted = tier_name.strip().casefold() if tier_name is not None else None
+    available: list[Seat] = []
+    for seat in seats:
+        if seat.is_blocked or seat.id in booked_ids or seat.hold_id in active_holds:
+            continue
+        if wanted is not None and seat.tier_name.strip().casefold() != wanted:
+            continue
+        available.append(seat)
+    return available
+
+
+def _seconds_remaining(hold: SeatHold, now: datetime | None = None) -> int:
+    if hold.status != "active":
+        return 0
+    now = now or _utcnow()
+    return max(0, int((hold.expires_at - now).total_seconds()))
+
+
+def _hold_seats(db: Session, hold_id: int) -> list[Seat]:
+    return (
+        db.query(Seat)
+        .filter(Seat.hold_id == hold_id)
+        .order_by(Seat.row_order.asc(), Seat.seat_number.asc())
+        .all()
+    )
+
+
+def _hold_out(hold: SeatHold, seats: list[Seat], now: datetime | None = None) -> HoldOut:
+    return HoldOut(
+        hold_id=hold.id,
+        event_id=hold.event_id,
+        status=hold.status,
+        seconds_remaining=_seconds_remaining(hold, now),
+        seats=[
+            HeldSeatOut(id=seat.id, label=seat.label, tier_name=seat.tier_name)
+            for seat in seats
+        ],
+    )
+
+
+def build_seat_map(db: Session, event_id: int, user_id: int | None) -> SeatMapOut:
+    """Derive every seat's state from blocked flags, tickets, and active holds."""
+    _seat_map_event(db, event_id)
+
+    release_expired_holds(db, event_id)
+
+    seats, booked_ids, active_holds = _seat_states(db, event_id)
+
 
     tier_order: list[str] = []
     tier_rows: dict[str, list[RowOut]] = {}
@@ -477,12 +561,25 @@ def _issue_ticket_record(
     tier: str,
     attendee: Attendee | None = None,
     user_id: int | None = None,
+    seat: Seat | None = None,
 ) -> Ticket:
-    tier = tier.strip().lower()
-    if tier not in TIER_PREFIXES:
-        tier = "general"
+    """Write one ticket row and stamp its signature.
 
-    seat_number = _next_seat_number(db, event_id, tier)
+    With ``seat`` the ticket takes the seat's own tier and label, so an
+    admin-defined tier such as "Balcony" survives instead of being normalised to
+    one of the three legacy names. Without it the legacy ``GEN-001`` numbering
+    applies unchanged.
+    """
+    if seat is not None:
+        tier = seat.tier_name
+        seat_number = seat.label
+        seat_id = seat.id
+    else:
+        tier = tier.strip().lower()
+        if tier not in TIER_PREFIXES:
+            tier = "general"
+        seat_number = _next_seat_number(db, event_id, tier)
+        seat_id = None
 
     if attendee is None:
         attendee = _get_or_create_attendee(db, attendee_name, attendee_contact, campus_id)
@@ -492,16 +589,22 @@ def _issue_ticket_record(
         attendee_id=attendee.id,
         tier=tier,
         seat_number=seat_number,
+        seat_id=seat_id,
         status="issued",
         user_id=user_id,
     )
     db.add(ticket)
     db.flush()
     ticket.qr_signature = sign_ticket(ticket.id)
+    db.flush()
     return ticket
 
 
-def promote_next_waitlisted(db: Session, event_id: int) -> PromotedAttendeeInfo | None:
+def promote_next_waitlisted(
+    db: Session,
+    event_id: int,
+    seat: Seat | None = None,
+) -> PromotedAttendeeInfo | None:
     """Hand one freed seat to the person at the head of the queue.
 
     ET-07 / ET-11 contract for any path that frees a seat:
@@ -512,6 +615,10 @@ def promote_next_waitlisted(db: Session, event_id: int) -> PromotedAttendeeInfo 
       let the caller own the commit. On failure the caller's rollback undoes
       both the revocation and the promotion together.
     * A bulk revocation must therefore loop rather than call this once.
+
+    ``seat`` is the physical seat that was freed. Seat-map events pass it so the
+    promoted ticket lands on that exact seat and takes its tier; legacy events
+    leave it out and keep the numbered ``GEN-001`` behaviour.
 
     Returns ``None`` when nobody is waiting.
     """
@@ -531,12 +638,14 @@ def promote_next_waitlisted(db: Session, event_id: int) -> PromotedAttendeeInfo 
         attendee_name=entry.attendee_name,
         attendee_contact=entry.attendee_contact,
         campus_id=entry.campus_id,
+        # A seat-driven queue stores "any"; the seat itself decides the tier.
         tier=entry.tier,
         attendee=entry.attendee,
         # The queue row remembers who asked, so the promoted ticket lands in that
         # account's "my tickets" too rather than only being reachable through the
         # waitlist entry.
         user_id=entry.user_id,
+        seat=seat,
     )
 
     entry.status = "promoted"
@@ -593,10 +702,417 @@ def find_active_ticket_for_user(
     return query.order_by(Ticket.id.asc()).first()
 
 
+def create_hold(db: Session, event_id: int, user: User, seat_ids: list[int]) -> HoldOut:
+    """Claim seats for a short window while the attendee details are filled in.
+
+    All-or-nothing: the claim is one conditional UPDATE, and a short rowcount
+    rolls the whole transaction back -- including the cancellation of this
+    user's previous hold, which is restored by the rollback.
+    """
+    _seat_map_event(db, event_id)
+
+    if not 1 <= len(seat_ids) <= MAX_SEATS_PER_BOOKING:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"select between 1 and {MAX_SEATS_PER_BOOKING} seats",
+        )
+
+    requested = set(seat_ids)
+    if len(requested) != len(seat_ids):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="duplicate seat ids")
+
+    chosen = db.query(Seat).filter(Seat.id.in_(requested)).all()
+    if len(chosen) != len(requested) or any(seat.event_id != event_id for seat in chosen):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="one or more seats do not belong to this event",
+        )
+    if any(seat.is_blocked for seat in chosen):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="One or more seats are no longer available",
+        )
+
+    # Commits on its own, so it has to run before the claim transaction opens.
+    release_expired_holds(db, event_id)
+
+    now = _utcnow()
+    expires_at = now + timedelta(seconds=get_seat_hold_seconds())
+    try:
+        # A user gets one active hold per event; taking a new one drops the old.
+        previous = (
+            db.query(SeatHold)
+            .filter(
+                SeatHold.event_id == event_id,
+                SeatHold.user_id == user.id,
+                SeatHold.status == "active",
+            )
+            .all()
+        )
+        previous_ids = [hold.id for hold in previous]
+        if previous_ids:
+            db.query(Seat).filter(Seat.hold_id.in_(previous_ids)).update(
+                {Seat.hold_id: None},
+                synchronize_session=False,
+            )
+            for old_hold in previous:
+                old_hold.status = "cancelled"
+
+        hold = SeatHold(
+            event_id=event_id,
+            user_id=user.id,
+            status="active",
+            created_at=now,
+            expires_at=expires_at,
+        )
+        db.add(hold)
+        db.flush()
+
+        # NOT IN over a subquery that contains NULL matches nothing, so the
+        # NULL rows have to be filtered out or a fresh event could never be
+        # claimed at all.
+        booked = select(Ticket.seat_id).where(Ticket.seat_id.isnot(None))
+        claimed = (
+            db.query(Seat)
+            .filter(
+                Seat.id.in_(requested),
+                Seat.event_id == event_id,
+                Seat.hold_id.is_(None),
+                Seat.is_blocked.is_(False),
+                Seat.id.not_in(booked),
+            )
+            .update({Seat.hold_id: hold.id}, synchronize_session=False)
+        )
+        if claimed != len(requested):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="One or more seats are no longer available",
+            )
+
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+    return _hold_out(hold, _hold_seats(db, hold.id), now)
+
+
+def _owned_hold(db: Session, hold_id: int, user: User) -> SeatHold:
+    """A hold the caller owns. Someone else's hold is a 404, not a 403."""
+    hold = db.get(SeatHold, hold_id)
+    if hold is None or hold.user_id != user.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Hold not found")
+    return hold
+
+
+def get_hold(db: Session, hold_id: int, user: User) -> HoldOut:
+    hold = _owned_hold(db, hold_id, user)
+    now = _utcnow()
+
+    if hold.status == "active" and hold.expires_at <= now:
+        release_expired_holds(db, hold.event_id)
+        db.refresh(hold)
+
+    seats = _hold_seats(db, hold.id) if hold.status == "active" else []
+    return _hold_out(hold, seats, now)
+
+
+def cancel_hold(db: Session, hold_id: int, user: User) -> HoldOut:
+    """Give the seats back. Cancelling an already-cancelled hold is a no-op."""
+    hold = _owned_hold(db, hold_id, user)
+    now = _utcnow()
+
+    if hold.status == "confirmed":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="booking already confirmed")
+    if hold.status == "active" and hold.expires_at <= now:
+        release_expired_holds(db, hold.event_id)
+        db.refresh(hold)
+    if hold.status != "active":
+        return _hold_out(hold, [], now)
+
+    released = _hold_seats(db, hold.id)
+    try:
+        # Same conditional shape as confirm, so a cancel racing a confirm cannot
+        # both succeed: whichever UPDATE matches first wins.
+        updated = (
+            db.query(SeatHold)
+            .filter(
+                SeatHold.id == hold.id,
+                SeatHold.user_id == user.id,
+                SeatHold.status == "active",
+            )
+            .update({SeatHold.status: "cancelled"}, synchronize_session=False)
+        )
+        if updated == 1:
+            db.query(Seat).filter(Seat.hold_id == hold.id).update(
+                {Seat.hold_id: None},
+                synchronize_session=False,
+            )
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+    db.refresh(hold)
+    if updated != 1:
+        if hold.status == "confirmed":
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="booking already confirmed")
+        return _hold_out(hold, [], now)
+
+    return _hold_out(hold, released, now)
+
+
+def confirm_hold(
+    db: Session,
+    hold_id: int,
+    user: User,
+    attendee_name: str,
+    attendee_contact: str,
+    campus_id: str | None,
+) -> ConfirmHoldOut:
+    """Turn every held seat into a ticket, once.
+
+    The status change is a conditional UPDATE and the first statement in the
+    transaction, so a double click or two simultaneous confirms cannot both
+    issue tickets: the loser sees rowcount 0 and rolls back.
+    """
+    hold = _owned_hold(db, hold_id, user)
+
+    if hold.status == "confirmed":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="already confirmed")
+    if hold.status != "active":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="hold expired")
+
+    # Expires anything stale for the event, including this hold, and commits.
+    release_expired_holds(db, hold.event_id)
+    db.refresh(hold)
+    if hold.status == "confirmed":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="already confirmed")
+    if hold.status != "active":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="hold expired")
+
+    now = _utcnow()
+    try:
+        claimed = (
+            db.query(SeatHold)
+            .filter(
+                SeatHold.id == hold.id,
+                SeatHold.user_id == user.id,
+                SeatHold.status == "active",
+                SeatHold.expires_at > now,
+            )
+            .update({SeatHold.status: "confirmed"}, synchronize_session=False)
+        )
+        if claimed != 1:
+            raise _HoldNotClaimed
+
+        seats = _hold_seats(db, hold.id)
+        attendee = _get_or_create_attendee(
+            db,
+            attendee_name,
+            str(attendee_contact),
+            campus_id,
+        )
+        tickets = [
+            _issue_ticket_record(
+                db=db,
+                event_id=hold.event_id,
+                attendee_name=attendee_name,
+                attendee_contact=str(attendee_contact),
+                campus_id=campus_id,
+                tier=seat.tier_name,
+                attendee=attendee,
+                user_id=user.id,
+                seat=seat,
+            )
+            for seat in seats
+        ]
+        # The tickets now point at the seats, which is what makes them read as
+        # booked, so the ephemeral hold link can go.
+        db.query(Seat).filter(Seat.hold_id == hold.id).update(
+            {Seat.hold_id: None},
+            synchronize_session=False,
+        )
+        db.commit()
+    except _HoldNotClaimed:
+        db.rollback()
+        fresh = db.get(SeatHold, hold_id)
+        if fresh is None or fresh.user_id != user.id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Hold not found")
+        if fresh.status == "confirmed":
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="already confirmed")
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="hold expired")
+    except Exception:
+        db.rollback()
+        raise
+
+    db.refresh(hold)
+    return ConfirmHoldOut(
+        hold_id=hold.id,
+        status=hold.status,
+        tickets=[_ticket_detail(ticket) for ticket in tickets],
+    )
+
+
+def join_event_waitlist(
+    db: Session,
+    event_id: int,
+    user: User,
+    attendee_name: str,
+    attendee_contact: str,
+    campus_id: str | None,
+) -> WaitlistEntry:
+    """Queue a seat-map attendee, but only once the room is genuinely full."""
+    _seat_map_event(db, event_id)
+    release_expired_holds(db, event_id)
+
+    existing = (
+        db.query(WaitlistEntry)
+        .filter(
+            WaitlistEntry.event_id == event_id,
+            WaitlistEntry.user_id == user.id,
+            WaitlistEntry.status == "waiting",
+        )
+        .first()
+    )
+    if existing is not None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="already on the waitlist")
+
+    if _available_seats(db, event_id):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="seats are still available")
+
+    entry = join_waitlist(
+        db=db,
+        event_id=event_id,
+        attendee_name=attendee_name,
+        attendee_contact=str(attendee_contact),
+        campus_id=campus_id,
+        # A seat-driven queue does not pick a tier: the seat that frees up does.
+        tier="any",
+        user_id=user.id,
+    )
+    if entry.user_id != user.id:
+        # join_waitlist is idempotent per attendee, so a second account joining
+        # for an attendee already in the queue would otherwise be handed someone
+        # else's entry.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="this attendee is already on the waitlist",
+        )
+    return entry
+
+
+def _issue_seat_ticket(
+    db: Session,
+    event: Event,
+    payload: TicketCreate,
+    user_id: int | None,
+) -> Ticket | WaitlistEntry:
+    """Seat-map counterpart of the legacy auto-numbered issuance path."""
+    release_expired_holds(db, event.id)
+
+    tier_names = [
+        name
+        for (name,) in db.query(Seat.tier_name)
+        .filter(Seat.event_id == event.id)
+        .order_by(Seat.row_order.asc())
+        .distinct()
+        .all()
+    ]
+    requested = payload.tier.strip()
+    tier_name = next(
+        (name for name in tier_names if name.casefold() == requested.casefold()),
+        None,
+    )
+    if tier_name is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="unknown tier")
+
+    attendee = _get_or_create_attendee(
+        db,
+        payload.attendee_name,
+        str(payload.attendee_contact),
+        payload.campus_id,
+    )
+
+    # Kept only on this path, as agreed: a hold confirmation issues one ticket
+    # per seat for the same attendee and must not be blocked by this.
+    if find_active_ticket_for_user(db, event_id=event.id, user_id=user_id, attendee_id=attendee.id) is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="You already hold a ticket for this event",
+        )
+
+    def waitlist() -> WaitlistEntry:
+        # Resolve the attendee here rather than reusing the one from the retry
+        # loop: a rollback undoes an attendee insert, so that object can be
+        # stale by the time this runs.
+        return join_waitlist(
+            db=db,
+            event_id=event.id,
+            attendee_name=payload.attendee_name,
+            attendee_contact=str(payload.attendee_contact),
+            campus_id=payload.campus_id,
+            tier="any",
+            user_id=user_id,
+        )
+
+    candidates = _available_seats(db, event.id, tier_name)
+    if not candidates:
+        if _available_seats(db, event.id):
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="tier sold out")
+        return waitlist()
+
+    for attempt in range(3):
+        candidates = _available_seats(db, event.id, tier_name)
+        if not candidates:
+            break
+        try:
+            if attempt:
+                # A rollback also undoes the attendee insert from the failed
+                # attempt, so it has to be recreated before retrying.
+                attendee = _get_or_create_attendee(
+                    db,
+                    payload.attendee_name,
+                    str(payload.attendee_contact),
+                    payload.campus_id,
+                )
+            ticket = _issue_ticket_record(
+                db=db,
+                event_id=event.id,
+                attendee_name=payload.attendee_name,
+                attendee_contact=str(payload.attendee_contact),
+                campus_id=payload.campus_id,
+                tier=tier_name,
+                attendee=attendee,
+                user_id=user_id,
+                seat=candidates[0],
+            )
+            db.commit()
+            db.refresh(ticket)
+            return ticket
+        except IntegrityError:
+            # Someone else took that seat between the scan and the insert.
+            db.rollback()
+
+    if not _available_seats(db, event.id, tier_name):
+        if _available_seats(db, event.id):
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="tier sold out")
+        return waitlist()
+
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail="One or more seats are no longer available",
+    )
+
+
 def issue_ticket(db: Session, payload: TicketCreate, user_id: int | None = None) -> Ticket | WaitlistEntry:
+
     event = db.get(Event, payload.event_id)
     if event is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
+
+    if event.has_seat_map:
+        return _issue_seat_ticket(db, event, payload, user_id)
 
     tier = payload.tier.strip().lower()
     if tier not in TIER_PREFIXES:
@@ -725,6 +1241,24 @@ def _my_tickets(db: Session, user: User) -> list[TicketDetail]:
         db.query(Ticket)
         .options(joinedload(Ticket.event), joinedload(Ticket.attendee))
         .filter(Ticket.user_id == user.id, Ticket.status != "revoked")
+        .order_by(Ticket.issued_at.desc(), Ticket.id.desc())
+        .all()
+    )
+    return [_ticket_detail(ticket) for ticket in tickets]
+
+
+def get_my_tickets(db: Session, user: User) -> list[TicketDetail]:
+    """Everything this account has ever been issued, revoked rows included.
+
+    Unlike ``_my_tickets`` (which backs ``/me/registrations`` and hides revoked
+    rows so a freed seat does not look like a live pass), this is the history
+    view: the seat label is kept on the revoked row, so the caller can still see
+    which seat they gave up and when the status changed.
+    """
+    tickets = (
+        db.query(Ticket)
+        .options(joinedload(Ticket.event), joinedload(Ticket.attendee))
+        .filter(Ticket.user_id == user.id)
         .order_by(Ticket.issued_at.desc(), Ticket.id.desc())
         .all()
     )
@@ -865,12 +1399,27 @@ def revoke_ticket(db: Session, ticket_id: int) -> Ticket:
 
     try:
         ticket.status = "revoked"
-        ticket.revoked_at = datetime.now(UTC).replace(tzinfo=None)
+        ticket.revoked_at = _utcnow()
+
+        # Clear the seat reference first: it is UNIQUE, and the promoted ticket
+        # must be able to claim the seat before this transaction ends.
+        freed_seat: Seat | None = None
+        if ticket.seat_id is not None:
+            freed_seat = db.get(Seat, ticket.seat_id)
+            ticket.seat_id = None
         db.flush()
 
-        # One seat freed, so exactly one promotion. See promote_next_waitlist's
-        # contract for other callers.
-        promoted_info = promote_next_waitlisted(db=db, event_id=ticket.event_id)
+        if freed_seat is not None:
+            # Seat-map event: the queue entry inherits this exact seat.
+            promoted_info = promote_next_waitlisted(db=db, event_id=ticket.event_id, seat=freed_seat)
+        elif not ticket.event.has_seat_map:
+            # One seat freed, so exactly one promotion. See promote_next_waitlisted's
+            # contract for other callers.
+            promoted_info = promote_next_waitlisted(db=db, event_id=ticket.event_id)
+        else:
+            # A seat-map ticket with no seat pointer freed nothing, so there is
+            # nothing to hand to the queue.
+            promoted_info = None
 
         db.commit()
         db.refresh(ticket)
@@ -1070,7 +1619,10 @@ def get_event_stats(db: Session, event_id: int) -> EventStatsOut:
     tier_checked: dict[str, int] = {}
     ticket_rows: list[EventStatsTicket] = []
     for ticket in tickets:
-        tier_key = (ticket.tier or "general").lower()
+        # Seat-map tiers are admin-defined ("Balcony", "Standing"), so the name
+        # is kept exactly as the layout spelt it. Legacy keeps its lowercased
+        # General/Premium/VIP keys.
+        tier_key = ticket.tier if event.has_seat_map else (ticket.tier or "general").lower()
         if ticket.status != "revoked":
             tier_issued[tier_key] = tier_issued.get(tier_key, 0) + 1
 
@@ -1104,9 +1656,27 @@ def get_event_stats(db: Session, event_id: int) -> EventStatsOut:
     remaining = max(event.capacity - issued, 0)
     check_in_rate = round((checked_in / issued * 100) if issued else 0.0, 1)
 
+    if event.has_seat_map:
+        # Show every tier the layout defines, in layout order, even when nothing
+        # has been sold in it yet -- an empty "Balcony" row is information.
+        seat_tiers = [
+            name
+            for (name,) in db.query(Seat.tier_name)
+            .filter(Seat.event_id == event_id)
+            .order_by(Seat.row_order.asc())
+            .distinct()
+            .all()
+        ]
+        for tier in dict.fromkeys(seat_tiers):
+            tier_issued.setdefault(tier, 0)
+            tier_checked.setdefault(tier, 0)
+        tier_order = list(dict.fromkeys(seat_tiers))
+    else:
+        tier_order = sorted(tier_issued)
+
     tier_breakdown = [
-        EventStatsTier(tier=tier, issued=count, checked_in=tier_checked.get(tier, 0))
-        for tier, count in sorted(tier_issued.items())
+        EventStatsTier(tier=tier, issued=tier_issued.get(tier, 0), checked_in=tier_checked.get(tier, 0))
+        for tier in tier_order
     ]
     gate_breakdown = [
         EventStatsGate(

@@ -6,8 +6,10 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.exc import IntegrityError
 
 TEST_DATABASE_PATH = Path(tempfile.gettempdir()) / f"ticketx-{uuid4().hex}.db"
 os.environ["DATABASE_URL"] = f"sqlite:///{TEST_DATABASE_PATH.as_posix()}"
@@ -2158,3 +2160,747 @@ def test_legacy_event_and_legacy_ticket_flow_are_unchanged() -> None:
 
     with SessionLocal() as db:
         assert db.query(Seat).filter(Seat.event_id == created["id"]).count() == 0
+
+
+# ---------------------------------------------------------------------------
+# Part 2: seat holds, per-seat booking, and the seat-aware waitlist
+# ---------------------------------------------------------------------------
+
+
+def _register_user(client: TestClient, username: str) -> dict[str, str]:
+    response = client.post(
+        "/auth/register",
+        json={
+            "username": username,
+            "password": "secret123",
+            "display_name": username.title(),
+            "role": "user",
+        },
+    )
+    assert response.status_code == 201, response.text
+    return {"Authorization": f"Bearer {response.json()['token']}"}
+
+
+def _seat_ids(client: TestClient, event_id: int, headers: dict[str, str]) -> list[int]:
+    body = client.get(f"/events/{event_id}/seats", headers=headers)
+    assert body.status_code == 200, body.text
+    return [seat["id"] for seat in _flatten_seat_map(body.json())]
+
+
+def _seat_map(client: TestClient, event_id: int, headers: dict[str, str]) -> dict[str, dict]:
+    body = client.get(f"/events/{event_id}/seats", headers=headers)
+    assert body.status_code == 200, body.text
+    return {seat["label"]: seat for seat in _flatten_seat_map(body.json())}
+
+
+def _hold(
+    client: TestClient,
+    headers: dict[str, str],
+    event_id: int,
+    seat_ids: list[int],
+):
+    return client.post(f"/events/{event_id}/holds", json={"seat_ids": seat_ids}, headers=headers)
+
+
+def _confirm(
+    client: TestClient,
+    headers: dict[str, str],
+    hold_id: int,
+    name: str = "Seat Holder",
+    contact: str = "holder@example.edu",
+    campus_id: str | None = "CAMP-HOLD",
+):
+    return client.post(
+        f"/holds/{hold_id}/confirm",
+        json={"attendee_name": name, "attendee_contact": contact, "campus_id": campus_id},
+        headers=headers,
+    )
+
+
+def _book(
+    client: TestClient,
+    headers: dict[str, str],
+    event_id: int,
+    tier: str,
+    name: str,
+    contact: str,
+):
+    return client.post(
+        "/tickets",
+        json={
+            "event_id": event_id,
+            "attendee_name": name,
+            "attendee_contact": contact,
+            "tier": tier,
+        },
+        headers=headers,
+    )
+
+
+def test_hold_marks_seats_held_for_owner_and_others() -> None:
+    reset_database()
+    client = TestClient(app)
+    admin_headers = auth_headers(client, "admin", "admin123")
+    user_headers = auth_headers(client, "attendee", "attendee123")
+    other_headers = _register_user(client, "second")
+    event = _create_seat_map_event(
+        client,
+        admin_headers,
+        [{"name": "Premium", "rows": [{"label": "A", "blocks": [3]}]}],
+    )
+    ids = _seat_ids(client, event["id"], user_headers)
+
+    response = _hold(client, user_headers, event["id"], ids[:2])
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["status"] == "active"
+    assert body["event_id"] == event["id"]
+    assert 0 < body["seconds_remaining"] <= 600
+    assert [seat["label"] for seat in body["seats"]] == ["A1", "A2"]
+
+    fetched = client.get(f"/holds/{body['hold_id']}", headers=user_headers)
+    assert fetched.status_code == 200
+    assert [seat["label"] for seat in fetched.json()["seats"]] == ["A1", "A2"]
+
+    mine = _seat_map(client, event["id"], user_headers)
+    assert mine["A1"]["state"] == "held"
+    assert mine["A1"]["mine"] is True
+    assert mine["A3"]["state"] == "available"
+    assert mine["A3"]["mine"] is False
+
+    theirs = _seat_map(client, event["id"], other_headers)
+    assert theirs["A1"]["state"] == "held"
+    assert theirs["A1"]["mine"] is False
+
+
+def test_hold_is_all_or_nothing() -> None:
+    reset_database()
+    client = TestClient(app)
+    admin_headers = auth_headers(client, "admin", "admin123")
+    user_headers = auth_headers(client, "attendee", "attendee123")
+    other_headers = _register_user(client, "second")
+    event = _create_seat_map_event(
+        client,
+        admin_headers,
+        [{"name": "Premium", "rows": [{"label": "A", "blocks": [6]}]}],
+    )
+    ids = _seat_ids(client, event["id"], user_headers)
+
+    assert _hold(client, other_headers, event["id"], [ids[2]]).status_code == 201
+
+    response = _hold(client, user_headers, event["id"], [ids[1], ids[2], ids[3]])
+    assert response.status_code == 409
+    assert response.json()["detail"] == "One or more seats are no longer available"
+
+    seats = _seat_map(client, event["id"], user_headers)
+    assert seats["A2"]["state"] == "available"
+    assert seats["A3"]["state"] == "held"
+    assert seats["A4"]["state"] == "available"
+
+
+def test_failed_hold_keeps_previous_hold_intact() -> None:
+    reset_database()
+    client = TestClient(app)
+    admin_headers = auth_headers(client, "admin", "admin123")
+    user_headers = auth_headers(client, "attendee", "attendee123")
+    other_headers = _register_user(client, "second")
+    event = _create_seat_map_event(
+        client,
+        admin_headers,
+        [{"name": "Premium", "rows": [{"label": "A", "blocks": [5]}]}],
+    )
+    ids = _seat_ids(client, event["id"], user_headers)
+
+    first = _hold(client, user_headers, event["id"], [ids[0], ids[1]])
+    assert first.status_code == 201
+    hold_id = first.json()["hold_id"]
+    assert _hold(client, other_headers, event["id"], [ids[3]]).status_code == 201
+
+    # Claims A3 and A4; A4 is taken, so the whole attempt rolls back.
+    assert _hold(client, user_headers, event["id"], [ids[2], ids[3]]).status_code == 409
+
+    kept = client.get(f"/holds/{hold_id}", headers=user_headers)
+    assert kept.status_code == 200
+    assert kept.json()["status"] == "active"
+    assert [seat["label"] for seat in kept.json()["seats"]] == ["A1", "A2"]
+
+    seats = _seat_map(client, event["id"], user_headers)
+    assert seats["A1"]["state"] == "held"
+    assert seats["A2"]["state"] == "held"
+    assert seats["A3"]["state"] == "available"
+
+
+def test_two_users_cannot_hold_the_same_seat() -> None:
+    reset_database()
+    client = TestClient(app)
+    admin_headers = auth_headers(client, "admin", "admin123")
+    user_headers = auth_headers(client, "attendee", "attendee123")
+    other_headers = _register_user(client, "second")
+    event = _create_seat_map_event(
+        client,
+        admin_headers,
+        [{"name": "Premium", "rows": [{"label": "A", "blocks": [2]}]}],
+    )
+    ids = _seat_ids(client, event["id"], user_headers)
+
+    assert _hold(client, user_headers, event["id"], [ids[0]]).status_code == 201
+    second = _hold(client, other_headers, event["id"], [ids[0]])
+    assert second.status_code == 409
+    assert second.json()["detail"] == "One or more seats are no longer available"
+
+    # The same guarantee at the storage layer: one ticket per seat.
+    with SessionLocal() as db:
+        seat = db.query(Seat).filter(Seat.id == ids[0]).one()
+        attendee = Attendee(
+            name="Duplicate Seat",
+            campus_id="CAMP-DUPLICATE",
+            contact_email="duplicate@example.edu",
+        )
+        db.add(attendee)
+        db.flush()
+        db.add(
+            Ticket(
+                event_id=event["id"],
+                attendee_id=attendee.id,
+                tier="Premium",
+                seat_number="A1",
+                seat_id=seat.id,
+                status="issued",
+            )
+        )
+        db.commit()
+
+        db.add(
+            Ticket(
+                event_id=event["id"],
+                attendee_id=attendee.id,
+                tier="Premium",
+                seat_number="A1",
+                seat_id=seat.id,
+                status="issued",
+            )
+        )
+        with pytest.raises(IntegrityError):
+            db.commit()
+        db.rollback()
+
+
+def test_hold_validations_and_role_protection() -> None:
+    reset_database()
+    client = TestClient(app)
+    admin_headers = auth_headers(client, "admin", "admin123")
+    scanner_headers = auth_headers(client, "scanner", "scanner123")
+    user_headers = auth_headers(client, "attendee", "attendee123")
+    event = _create_seat_map_event(
+        client,
+        admin_headers,
+        [
+            {"name": "Premium", "rows": [{"label": "A", "blocks": [10], "blocked": [4]}]},
+        ],
+    )
+    other_event = _create_seat_map_event(
+        client,
+        admin_headers,
+        [{"name": "Premium", "rows": [{"label": "Z", "blocks": [2]}]}],
+        title="Other Seat Map Event",
+    )
+    ids = _seat_ids(client, event["id"], user_headers)
+    other_ids = _seat_ids(client, other_event["id"], user_headers)
+    seats_by_label = _seat_map(client, event["id"], user_headers)
+    blocked_id = seats_by_label["A4"]["id"]
+    open_ids = [seat["id"] for label, seat in seats_by_label.items() if label != "A4"]
+
+    too_many = _hold(client, user_headers, event["id"], ids[:7])
+    assert too_many.status_code == 400
+    assert too_many.json()["detail"] == "select between 1 and 6 seats"
+
+    empty = _hold(client, user_headers, event["id"], [])
+    assert empty.status_code == 400
+
+    duplicate = _hold(client, user_headers, event["id"], [ids[0], ids[0]])
+    assert duplicate.status_code == 400
+
+    foreign = _hold(client, user_headers, event["id"], [other_ids[0]])
+    assert foreign.status_code == 400
+
+    blocked = _hold(client, user_headers, event["id"], [blocked_id])
+    assert blocked.status_code == 409
+
+    legacy = _hold(client, user_headers, 1, [ids[0]])
+    assert legacy.status_code == 409
+    assert legacy.json()["detail"] == "this event has no seat map"
+
+    missing = _hold(client, user_headers, 999, [ids[0]])
+    assert missing.status_code == 404
+
+    assert _hold(client, admin_headers, event["id"], [ids[0]]).status_code == 403
+    assert _hold(client, scanner_headers, event["id"], [ids[0]]).status_code == 403
+    assert client.post(f"/events/{event['id']}/holds", json={"seat_ids": [ids[0]]}).status_code == 401
+
+    # Six is allowed: the cap is inclusive.
+    assert _hold(client, user_headers, event["id"], open_ids[:6]).status_code == 201
+
+
+def test_hold_ownership_is_reported_as_missing() -> None:
+    reset_database()
+    client = TestClient(app)
+    admin_headers = auth_headers(client, "admin", "admin123")
+    user_headers = auth_headers(client, "attendee", "attendee123")
+    other_headers = _register_user(client, "second")
+    event = _create_seat_map_event(
+        client,
+        admin_headers,
+        [{"name": "Premium", "rows": [{"label": "A", "blocks": [2]}]}],
+    )
+    ids = _seat_ids(client, event["id"], user_headers)
+    hold = _hold(client, user_headers, event["id"], [ids[0]]).json()
+
+    assert client.get(f"/holds/{hold['hold_id']}", headers=other_headers).status_code == 404
+    assert client.delete(f"/holds/{hold['hold_id']}", headers=other_headers).status_code == 404
+    assert _confirm(client, other_headers, hold["hold_id"]).status_code == 404
+    assert client.get("/holds/999", headers=user_headers).status_code == 404
+
+    # The owner's hold survived the attempts.
+    assert client.get(f"/holds/{hold['hold_id']}", headers=user_headers).json()["status"] == "active"
+
+
+def test_expired_hold_releases_seats_and_refuses_confirm() -> None:
+    reset_database()
+    client = TestClient(app)
+    admin_headers = auth_headers(client, "admin", "admin123")
+    user_headers = auth_headers(client, "attendee", "attendee123")
+    event = _create_seat_map_event(
+        client,
+        admin_headers,
+        [{"name": "Premium", "rows": [{"label": "A", "blocks": [2]}]}],
+    )
+    ids = _seat_ids(client, event["id"], user_headers)
+    hold = _hold(client, user_headers, event["id"], ids).json()
+
+    with SessionLocal() as db:
+        db.query(SeatHold).filter(SeatHold.id == hold["hold_id"]).update(
+            {SeatHold.expires_at: datetime.now(UTC).replace(tzinfo=None) - timedelta(minutes=1)}
+        )
+        db.commit()
+
+    assert all(seat["state"] == "available" for seat in _seat_map(client, event["id"], user_headers).values())
+
+    fetched = client.get(f"/holds/{hold['hold_id']}", headers=user_headers)
+    assert fetched.status_code == 200
+    assert fetched.json()["status"] == "expired"
+    assert fetched.json()["seconds_remaining"] == 0
+    assert fetched.json()["seats"] == []
+
+    confirmed = _confirm(client, user_headers, hold["hold_id"])
+    assert confirmed.status_code == 409
+    assert confirmed.json()["detail"] == "hold expired"
+
+    with SessionLocal() as db:
+        assert db.get(SeatHold, hold["hold_id"]).status == "expired"
+        assert db.query(Ticket).filter(Ticket.event_id == event["id"]).count() == 0
+
+
+def test_new_hold_releases_the_previous_one() -> None:
+    reset_database()
+    client = TestClient(app)
+    admin_headers = auth_headers(client, "admin", "admin123")
+    user_headers = auth_headers(client, "attendee", "attendee123")
+    event = _create_seat_map_event(
+        client,
+        admin_headers,
+        [{"name": "Premium", "rows": [{"label": "A", "blocks": [3]}]}],
+    )
+    ids = _seat_ids(client, event["id"], user_headers)
+
+    first = _hold(client, user_headers, event["id"], [ids[0]]).json()
+    second = _hold(client, user_headers, event["id"], [ids[1]])
+    assert second.status_code == 201
+
+    previous = client.get(f"/holds/{first['hold_id']}", headers=user_headers).json()
+    assert previous["status"] == "cancelled"
+    assert previous["seats"] == []
+
+    seats = _seat_map(client, event["id"], user_headers)
+    assert seats["A1"]["state"] == "available"
+    assert seats["A2"]["state"] == "held"
+
+
+def test_confirm_issues_one_ticket_per_seat() -> None:
+    reset_database()
+    client = TestClient(app)
+    admin_headers = auth_headers(client, "admin", "admin123")
+    user_headers = auth_headers(client, "attendee", "attendee123")
+    user_id = client.get("/auth/me", headers=user_headers).json()["id"]
+    event = _create_seat_map_event(
+        client,
+        admin_headers,
+        [{"name": "Balcony", "rows": [{"label": "A", "blocks": [3]}]}],
+    )
+    ids = _seat_ids(client, event["id"], user_headers)
+    hold = _hold(client, user_headers, event["id"], ids[:2]).json()
+
+    response = _confirm(client, user_headers, hold["hold_id"])
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["status"] == "confirmed"
+    assert [ticket["seat_number"] for ticket in body["tickets"]] == ["A1", "A2"]
+    assert {ticket["tier"] for ticket in body["tickets"]} == {"Balcony"}
+    assert {ticket["attendee"]["campus_id"] for ticket in body["tickets"]} == {"CAMP-HOLD"}
+    assert {ticket["attendee"]["name"] for ticket in body["tickets"]} == {"Seat Holder"}
+    assert [ticket_id_from_signature(ticket["qr_signature"]) for ticket in body["tickets"]] == [
+        ticket["ticket_id"] for ticket in body["tickets"]
+    ]
+    ticket_ids = {ticket["ticket_id"] for ticket in body["tickets"]}
+
+    seats = _seat_map(client, event["id"], user_headers)
+    assert seats["A1"]["state"] == "booked"
+    assert seats["A2"]["state"] == "booked"
+    assert seats["A3"]["state"] == "available"
+
+    mine = client.get("/tickets/mine", headers=user_headers)
+    assert mine.status_code == 200
+    assert {ticket["ticket_id"] for ticket in mine.json()} == ticket_ids
+    assert {ticket["seat_number"] for ticket in mine.json()} == {"A1", "A2"}
+
+    with SessionLocal() as db:
+        rows = db.query(Ticket).filter(Ticket.event_id == event["id"]).all()
+        assert len(rows) == 2
+        assert len({row.seat_id for row in rows}) == 2
+        assert {row.user_id for row in rows} == {user_id}
+        hold_row = db.get(SeatHold, hold["hold_id"])
+        assert hold_row.status == "confirmed"
+        assert db.query(Seat).filter(Seat.hold_id == hold["hold_id"]).count() == 0
+
+    refreshed = client.get(f"/holds/{hold['hold_id']}", headers=user_headers).json()
+    assert refreshed["status"] == "confirmed"
+    assert refreshed["seats"] == []
+
+    again = _confirm(client, user_headers, hold["hold_id"])
+    assert again.status_code == 409
+    assert again.json()["detail"] == "already confirmed"
+    with SessionLocal() as db:
+        assert db.query(Ticket).filter(Ticket.event_id == event["id"]).count() == 2
+
+
+def test_cancel_releases_seats_and_is_idempotent() -> None:
+    reset_database()
+    client = TestClient(app)
+    admin_headers = auth_headers(client, "admin", "admin123")
+    user_headers = auth_headers(client, "attendee", "attendee123")
+    event = _create_seat_map_event(
+        client,
+        admin_headers,
+        [{"name": "Premium", "rows": [{"label": "A", "blocks": [3]}]}],
+    )
+    ids = _seat_ids(client, event["id"], user_headers)
+    hold = _hold(client, user_headers, event["id"], ids[:2]).json()
+
+    cancelled = client.delete(f"/holds/{hold['hold_id']}", headers=user_headers)
+    assert cancelled.status_code == 200
+    assert cancelled.json()["status"] == "cancelled"
+    assert [seat["label"] for seat in cancelled.json()["seats"]] == ["A1", "A2"]
+
+    assert all(seat["state"] == "available" for seat in _seat_map(client, event["id"], user_headers).values())
+
+    again = client.delete(f"/holds/{hold['hold_id']}", headers=user_headers)
+    assert again.status_code == 200
+    assert again.json()["status"] == "cancelled"
+    assert again.json()["seats"] == []
+
+    confirmed_hold = _hold(client, user_headers, event["id"], [ids[2]]).json()
+    assert _confirm(client, user_headers, confirmed_hold["hold_id"]).status_code == 201
+    refused = client.delete(f"/holds/{confirmed_hold['hold_id']}", headers=user_headers)
+    assert refused.status_code == 409
+    assert refused.json()["detail"] == "booking already confirmed"
+
+
+def test_auto_assign_picks_the_first_seat_in_the_tier() -> None:
+    reset_database()
+    client = TestClient(app)
+    admin_headers = auth_headers(client, "admin", "admin123")
+    user_headers = auth_headers(client, "attendee", "attendee123")
+    event = _create_seat_map_event(
+        client,
+        admin_headers,
+        [
+            {"name": "Premium", "rows": [{"label": "A", "blocks": [2]}]},
+            {"name": "General", "rows": [{"label": "B", "blocks": [2]}]},
+        ],
+    )
+
+    first = _book(client, user_headers, event["id"], "premium", "First Buyer", "first@example.edu")
+    assert first.status_code == 201, first.text
+    assert first.json()["seat_number"] == "A1"
+    assert first.json()["tier"] == "Premium"
+
+    # Tier matching is case-insensitive against the admin-defined name.
+    second = _book(client, user_headers, event["id"], "PREMIUM", "Second Buyer", "second@example.edu")
+    assert second.status_code == 201
+    assert second.json()["seat_number"] == "A2"
+
+    general = _book(client, user_headers, event["id"], "General", "Third Buyer", "third@example.edu")
+    assert general.json()["seat_number"] == "B1"
+
+    unknown = _book(client, user_headers, event["id"], "Balcony", "Fourth Buyer", "fourth@example.edu")
+    assert unknown.status_code == 400
+    assert unknown.json()["detail"] == "unknown tier"
+
+    seats = _seat_map(client, event["id"], user_headers)
+    assert seats["A1"]["state"] == "booked"
+    assert seats["A1"]["number"] == 1
+
+
+def test_auto_assign_sold_out_tier_then_waitlist() -> None:
+    reset_database()
+    client = TestClient(app)
+    admin_headers = auth_headers(client, "admin", "admin123")
+    user_headers = auth_headers(client, "attendee", "attendee123")
+    event = _create_seat_map_event(
+        client,
+        admin_headers,
+        [
+            {"name": "Premium", "rows": [{"label": "A", "blocks": [1]}]},
+            {"name": "General", "rows": [{"label": "B", "blocks": [2]}]},
+        ],
+    )
+
+    assert _book(client, user_headers, event["id"], "Premium", "Premium One", "p1@example.edu").status_code == 201
+    sold_out = _book(client, user_headers, event["id"], "Premium", "Premium Two", "p2@example.edu")
+    assert sold_out.status_code == 409
+    assert sold_out.json()["detail"] == "tier sold out"
+
+    assert _book(client, user_headers, event["id"], "General", "General One", "g1@example.edu").status_code == 201
+    assert _book(client, user_headers, event["id"], "General", "General Two", "g2@example.edu").status_code == 201
+
+    waitlisted = _book(client, user_headers, event["id"], "General", "General Three", "g3@example.edu")
+    assert waitlisted.status_code == 201
+    assert waitlisted.json()["outcome"] == "waitlisted"
+    assert waitlisted.json()["position"] == 1
+
+    with SessionLocal() as db:
+        entry = db.get(WaitlistEntry, waitlisted.json()["waitlist_entry_id"])
+        # A seat-driven queue does not pretend to be waiting for a specific tier.
+        assert entry.tier == "any"
+
+
+def test_event_waitlist_needs_a_full_house() -> None:
+    reset_database()
+    client = TestClient(app)
+    admin_headers = auth_headers(client, "admin", "admin123")
+    user_headers = auth_headers(client, "attendee", "attendee123")
+    event = _create_seat_map_event(
+        client,
+        admin_headers,
+        [{"name": "Premium", "rows": [{"label": "A", "blocks": [1]}]}],
+    )
+
+    payload = {
+        "attendee_name": "Queue Person",
+        "attendee_contact": "queue@example.edu",
+        "campus_id": "CAMP-QUEUE",
+    }
+    early = client.post(f"/events/{event['id']}/waitlist", json=payload, headers=user_headers)
+    assert early.status_code == 409
+    assert early.json()["detail"] == "seats are still available"
+
+    assert _book(client, user_headers, event["id"], "Premium", "Seat Filler", "filler@example.edu").status_code == 201
+
+    joined = client.post(f"/events/{event['id']}/waitlist", json=payload, headers=user_headers)
+    assert joined.status_code == 201, joined.text
+    assert joined.json()["outcome"] == "waitlisted"
+    assert joined.json()["position"] == 1
+
+    duplicate = client.post(f"/events/{event['id']}/waitlist", json=payload, headers=user_headers)
+    assert duplicate.status_code == 409
+    assert duplicate.json()["detail"] == "already on the waitlist"
+
+    legacy = client.post("/events/1/waitlist", json=payload, headers=user_headers)
+    assert legacy.status_code == 409
+    assert legacy.json()["detail"] == "this event has no seat map"
+
+    # A hold makes a seat unavailable, so a fully held room accepts the queue.
+    other = _create_seat_map_event(
+        client,
+        admin_headers,
+        [{"name": "Premium", "rows": [{"label": "C", "blocks": [1]}]}],
+        title="Held Out Event",
+    )
+    hold_ids = _seat_ids(client, other["id"], user_headers)
+    assert _hold(client, user_headers, other["id"], hold_ids).status_code == 201
+    held = client.post(f"/events/{other['id']}/waitlist", json=payload, headers=user_headers)
+    assert held.status_code == 201, held.text
+    assert held.json()["outcome"] == "waitlisted"
+
+
+def test_revoke_frees_the_seat() -> None:
+    reset_database()
+    client = TestClient(app)
+    admin_headers = auth_headers(client, "admin", "admin123")
+    user_headers = auth_headers(client, "attendee", "attendee123")
+    event = _create_seat_map_event(
+        client,
+        admin_headers,
+        [{"name": "Premium", "rows": [{"label": "A", "blocks": [2]}]}],
+    )
+
+    ticket = _book(client, user_headers, event["id"], "Premium", "Revoke Me", "revoke@example.edu").json()
+    assert ticket["seat_number"] == "A1"
+
+    revoked = client.post(f"/tickets/{ticket['ticket_id']}/revoke", headers=admin_headers)
+    assert revoked.status_code == 200
+    assert revoked.json()["status"] == "revoked"
+    assert revoked.json()["promoted_attendee"] is None
+
+    with SessionLocal() as db:
+        row = db.get(Ticket, ticket["ticket_id"])
+        assert row.seat_id is None
+        assert row.seat_number == "A1"
+
+    seats = _seat_map(client, event["id"], user_headers)
+    assert seats["A1"]["state"] == "available"
+
+    mine = client.get("/tickets/mine", headers=user_headers).json()
+    assert [item["ticket_id"] for item in mine] == [ticket["ticket_id"]]
+    assert mine[0]["status"] == "revoked"
+    assert mine[0]["seat_number"] == "A1"
+
+
+def test_revoke_promotes_the_waitlist_into_the_freed_seat() -> None:
+    reset_database()
+    client = TestClient(app)
+    admin_headers = auth_headers(client, "admin", "admin123")
+    holder_headers = auth_headers(client, "attendee", "attendee123")
+    queued_headers = _register_user(client, "second")
+    queued_id = client.get("/auth/me", headers=queued_headers).json()["id"]
+    event = _create_seat_map_event(
+        client,
+        admin_headers,
+        [{"name": "Premium", "rows": [{"label": "A", "blocks": [1]}]}],
+    )
+
+    ticket = _book(client, holder_headers, event["id"], "Premium", "Seat Holder", "seat@example.edu").json()
+    join = client.post(
+        f"/events/{event['id']}/waitlist",
+        json={"attendee_name": "Next In Line", "attendee_contact": "next@example.edu", "campus_id": "CAMP-NEXT"},
+        headers=queued_headers,
+    )
+    assert join.status_code == 201, join.text
+    entry_id = join.json()["waitlist_entry_id"]
+
+    revoked = client.post(f"/tickets/{ticket['ticket_id']}/revoke", headers=admin_headers)
+    assert revoked.status_code == 200
+    promoted = revoked.json()["promoted_attendee"]
+    assert promoted is not None
+    assert promoted["attendee_name"] == "Next In Line"
+    assert promoted["tier"] == "Premium"
+
+    with SessionLocal() as db:
+        seat = db.query(Seat).filter(Seat.event_id == event["id"]).one()
+        entry = db.get(WaitlistEntry, entry_id)
+        promoted_ticket = db.get(Ticket, promoted["new_ticket_id"])
+
+        assert entry.status == "promoted"
+        assert entry.promoted_ticket_id == promoted_ticket.id
+        assert promoted_ticket.seat_id == seat.id
+        assert promoted_ticket.seat_number == seat.label == "A1"
+        assert promoted_ticket.tier == "Premium"
+        assert promoted_ticket.user_id == queued_id
+        # The revoked row keeps its label but no longer owns the seat.
+        assert db.get(Ticket, ticket["ticket_id"]).seat_id is None
+        # The queue is empty, so there is nothing left to renumber.
+        assert db.query(WaitlistEntry).filter(WaitlistEntry.event_id == event["id"], WaitlistEntry.status == "waiting").count() == 0
+
+    seats = _seat_map(client, event["id"], holder_headers)
+    assert seats["A1"]["state"] == "booked"
+
+
+def test_scanning_a_seat_booked_ticket() -> None:
+    reset_database()
+    client = TestClient(app)
+    admin_headers = auth_headers(client, "admin", "admin123")
+    user_headers = auth_headers(client, "attendee", "attendee123")
+    scanner_headers = auth_headers(client, "scanner", "scanner123")
+    event = _create_seat_map_event(
+        client,
+        admin_headers,
+        [{"name": "Premium", "rows": [{"label": "A", "blocks": [1]}]}],
+    )
+
+    ticket = _book(client, user_headers, event["id"], "Premium", "Scan Me", "scan@example.edu").json()
+
+    gate = client.post(
+        "/gates",
+        json={"event_id": event["id"], "name": "Seat Gate", "location": "Door 5", "volunteer_name": "Seat Volunteer"},
+        headers=admin_headers,
+    )
+    assert gate.status_code == 201
+    gate_id = gate.json()["id"]
+    volunteers = client.get("/volunteers", headers=scanner_headers).json()
+    volunteer_id = next(item["id"] for item in volunteers if item["gate_id"] == gate_id)
+
+    accepted = client.post(
+        "/scans",
+        json={"qr_signature": ticket["qr_signature"], "gate_id": gate_id, "volunteer_id": volunteer_id},
+        headers=scanner_headers,
+    )
+    assert accepted.status_code == 200
+    assert accepted.json()["result"] == "valid"
+    assert accepted.json()["seat_number"] == "A1"
+
+    duplicate = client.post(
+        "/scans",
+        json={"qr_signature": ticket["qr_signature"], "gate_id": gate_id, "volunteer_id": volunteer_id},
+        headers=scanner_headers,
+    )
+    assert duplicate.status_code == 200
+    assert duplicate.json()["result"] == "duplicate"
+
+
+def test_stats_and_csv_cover_legacy_and_seat_map_events() -> None:
+    reset_database()
+    client = TestClient(app)
+    admin_headers = auth_headers(client, "admin", "admin123")
+    user_headers = auth_headers(client, "attendee", "attendee123")
+
+    legacy_ticket = issue_demo_ticket(client, user_headers)
+    legacy_stats = client.get("/events/1/stats", headers=admin_headers)
+    assert legacy_stats.status_code == 200
+    assert [tier["tier"] for tier in legacy_stats.json()["tier_breakdown"]] == ["premium"]
+
+    legacy_csv = client.get("/events/1/export", headers=admin_headers)
+    assert legacy_csv.status_code == 200
+    assert "PRE-001" in legacy_csv.text
+    assert "Attendee Name" in legacy_csv.text
+
+    event = _create_seat_map_event(
+        client,
+        admin_headers,
+        [
+            {"name": "Premium", "rows": [{"label": "A", "blocks": [2]}]},
+            {"name": "General", "rows": [{"label": "B", "blocks": [2]}]},
+        ],
+    )
+    ids = _seat_ids(client, event["id"], user_headers)
+    general_block = _seat_map(client, event["id"], user_headers)["B1"]["id"]
+    hold = _hold(client, user_headers, event["id"], [general_block]).json()
+    assert _confirm(client, user_headers, hold["hold_id"], name="Stats Person", contact="stats@example.edu").status_code == 201
+
+    stats = client.get(f"/events/{event['id']}/stats", headers=admin_headers)
+    assert stats.status_code == 200
+    body = stats.json()
+    assert body["capacity"] == 4
+    assert body["issued"] == 1
+    assert body["remaining"] == 3
+    # Both layout tiers are listed in layout order, including the unsold one.
+    assert [(tier["tier"], tier["issued"]) for tier in body["tier_breakdown"]] == [
+        ("Premium", 0),
+        ("General", 1),
+    ]
+    assert body["tickets"][0]["seat_number"] == "B1"
+    assert len(ids) == 4
+
+    seat_csv = client.get(f"/events/{event['id']}/export", headers=admin_headers)
+    assert seat_csv.status_code == 200
+    assert "B1" in seat_csv.text
+    assert "General" in seat_csv.text
+

@@ -16,15 +16,20 @@ from .config import demo_seed_enabled
 from .database import SessionLocal, create_database, get_db
 from .models import Event, Gate, Scan, Seat, SeatHold, Ticket, User, Volunteer, WaitlistEntry
 from .schemas import (
+    ConfirmHoldIn,
+    ConfirmHoldOut,
     EventCreate,
     EventOut,
     EventStatsOut,
     EventSuggestion,
     EventSuggestionOut,
+    EventWaitlistIn,
     GateCreate,
     GateOut,
     GateStatus,
     GoogleLoginRequest,
+    HoldCreate,
+    HoldOut,
     LoginRequest,
     LoginResponse,
     MyRegistrations,
@@ -50,15 +55,21 @@ from .recommend import rank_events, signal_label
 from .services import (
     build_attendance_csv,
     build_seat_map,
+    cancel_hold,
+    confirm_hold,
     create_event,
     create_gate,
+    create_hold,
     get_event_stats,
     get_gate_status,
+    get_hold,
     get_my_registrations,
     get_my_scan_stats,
+    get_my_tickets,
     get_my_ticket_stats,
     get_or_create_google_user,
     issue_ticket,
+    join_event_waitlist,
     leave_waitlist,
     list_events,
     record_scan,
@@ -160,6 +171,75 @@ def event_seats(
     db: Session = Depends(get_db),
 ) -> SeatMapOut:
     return build_seat_map(db, event_id, current_user.id)
+
+
+@app.post("/events/{event_id}/holds", response_model=HoldOut, status_code=status.HTTP_201_CREATED)
+def create_hold_endpoint(
+    event_id: int,
+    payload: HoldCreate,
+    current_user: User = Depends(require_roles("user")),
+    db: Session = Depends(get_db),
+) -> HoldOut:
+    return create_hold(db, event_id, current_user, payload.seat_ids)
+
+
+@app.get("/holds/{hold_id}", response_model=HoldOut)
+def get_hold_endpoint(
+    hold_id: int,
+    current_user: User = Depends(require_roles("user")),
+    db: Session = Depends(get_db),
+) -> HoldOut:
+    return get_hold(db, hold_id, current_user)
+
+
+@app.post("/holds/{hold_id}/confirm", response_model=ConfirmHoldOut, status_code=status.HTTP_201_CREATED)
+def confirm_hold_endpoint(
+    hold_id: int,
+    payload: ConfirmHoldIn,
+    current_user: User = Depends(require_roles("user")),
+    db: Session = Depends(get_db),
+) -> ConfirmHoldOut:
+    return confirm_hold(
+        db,
+        hold_id,
+        current_user,
+        payload.attendee_name,
+        str(payload.attendee_contact),
+        payload.campus_id,
+    )
+
+
+@app.delete("/holds/{hold_id}", response_model=HoldOut)
+def cancel_hold_endpoint(
+    hold_id: int,
+    current_user: User = Depends(require_roles("user")),
+    db: Session = Depends(get_db),
+) -> HoldOut:
+    return cancel_hold(db, hold_id, current_user)
+
+
+@app.post("/events/{event_id}/waitlist", response_model=WaitlistJoinResponse, status_code=status.HTTP_201_CREATED)
+def join_event_waitlist_endpoint(
+    event_id: int,
+    payload: EventWaitlistIn,
+    current_user: User = Depends(require_roles("user")),
+    db: Session = Depends(get_db),
+) -> WaitlistJoinResponse:
+    entry = join_event_waitlist(
+        db,
+        event_id,
+        current_user,
+        payload.attendee_name,
+        str(payload.attendee_contact),
+        payload.campus_id,
+    )
+    return WaitlistJoinResponse(
+        outcome="waitlisted",
+        waitlisted=True,
+        position=entry.position,
+        event_id=entry.event_id,
+        waitlist_entry_id=entry.id,
+    )
 
 
 @app.delete("/events/{event_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -270,6 +350,19 @@ def create_ticket(
         seat_number=result.seat_number or "",
         status=result.status,
     )
+
+
+@app.get("/tickets/mine", response_model=list[TicketDetail])
+def my_tickets(
+    current_user: User = Depends(require_roles("user")),
+    db: Session = Depends(get_db),
+) -> list[TicketDetail]:
+    """The caller's ticket history, revoked rows included.
+
+    Declared before ``/tickets/{ticket_id}`` so the literal path is matched
+    instead of being read as a ticket id.
+    """
+    return get_my_tickets(db, current_user)
 
 
 @app.get("/tickets/{ticket_id}", response_model=TicketDetail)

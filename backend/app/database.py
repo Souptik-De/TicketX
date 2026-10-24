@@ -2,7 +2,7 @@ import logging
 import os
 from collections.abc import Generator
 
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 logger = logging.getLogger(__name__)
@@ -13,6 +13,24 @@ DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./ticketx.db")
 connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
 engine = create_engine(DATABASE_URL, connect_args=connect_args)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+
+if DATABASE_URL.startswith("sqlite"):
+
+    def _set_busy_timeout(dbapi_connection, _connection_record) -> None:
+        """Wait rather than fail when another connection holds the write lock.
+
+        SQLite allows one writer. The seat-hold claim is a conditional UPDATE, so
+        a concurrent claim must queue behind it and then re-read, not raise
+        ``database is locked`` at the caller.
+        """
+        cursor = dbapi_connection.cursor()
+        try:
+            cursor.execute("PRAGMA busy_timeout = 5000")
+        finally:
+            cursor.close()
+
+    event.listen(engine, "connect", _set_busy_timeout)
 
 
 class Base(DeclarativeBase):
