@@ -2,6 +2,7 @@ import csv
 import io
 import os
 import tempfile
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
@@ -14,9 +15,10 @@ os.environ["DATABASE_URL"] = f"sqlite:///{TEST_DATABASE_PATH.as_posix()}"
 from backend.app import database as database_module
 from backend.app.database import Base, SessionLocal, engine
 from backend.app.main import app
-from backend.app.models import Scan, Ticket, Volunteer, WaitlistEntry
+from backend.app.models import Attendee, Event, Scan, Seat, SeatHold, Ticket, User, Volunteer, WaitlistEntry
 from backend.app.security import ticket_id_from_signature
 from backend.app.seed import seed_reference_data
+from backend.app.services import release_expired_holds
 
 
 def teardown_module() -> None:
@@ -1758,3 +1760,401 @@ def test_promoted_ticket_also_appears_in_my_tickets() -> None:
     assert [entry["promoted_ticket"]["ticket_id"] for entry in body["waitlist"]] == [
         body["tickets"][0]["ticket_id"]
     ]
+
+
+def _seat_map_payload(tiers: list[dict], title: str = "Seat Map Event") -> dict:
+    return {
+        "title": title,
+        "description": "",
+        "date_time": "2026-12-12T18:00:00",
+        "venue": "Main Auditorium",
+        "seat_layout": {"tiers": tiers},
+    }
+
+
+def _create_seat_map_event(
+    client: TestClient,
+    admin_headers: dict[str, str],
+    tiers: list[dict],
+    title: str = "Seat Map Event",
+) -> dict:
+    response = client.post("/events", json=_seat_map_payload(tiers, title), headers=admin_headers)
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+def _flatten_seat_map(body: dict) -> list[dict]:
+    return [
+        seat
+        for tier in body["tiers"]
+        for row in tier["rows"]
+        for block in row["blocks"]
+        for seat in block
+    ]
+
+
+def test_seat_layout_validation_failures_return_422() -> None:
+    reset_database()
+    client = TestClient(app)
+    admin_headers = auth_headers(client, "admin", "admin123")
+
+    invalid_layouts = [
+        # At least one tier.
+        {"tiers": []},
+        # Tier names are non-empty and unique case-insensitively.
+        {"tiers": [{"name": "   ", "rows": [{"label": "A", "blocks": [1]}]}]},
+        {
+            "tiers": [
+                {"name": "Premium", "rows": [{"label": "A", "blocks": [1]}]},
+                {"name": "premium", "rows": [{"label": "B", "blocks": [1]}]},
+            ]
+        },
+        # Every tier needs a row and every row needs a block.
+        {"tiers": [{"name": "Premium", "rows": []}]},
+        {"tiers": [{"name": "Premium", "rows": [{"label": "A", "blocks": []}]}]},
+        # Row labels are case-insensitively unique, alphanumeric, and 1-24 chars.
+        {"tiers": [{"name": "Premium", "rows": [{"label": "A", "blocks": [1]}, {"label": "a", "blocks": [1]}]}]},
+        {"tiers": [{"name": "Premium", "rows": [{"label": "A-1", "blocks": [1]}]}]},
+        {"tiers": [{"name": "Premium", "rows": [{"label": "A", "blocks": [0]}]}]},
+        # Blocked numbers must be inside the row's 1..sum(blocks) range.
+        {"tiers": [{"name": "Premium", "rows": [{"label": "A", "blocks": [3], "blocked": [4]}]}]},
+        # More than 10 tiers.
+        {
+            "tiers": [
+                {"name": f"Tier {index}", "rows": [{"label": f"R{index}", "blocks": [1]}]}
+                for index in range(1, 12)
+            ]
+        },
+        # More than 60 rows.
+        {
+            "tiers": [
+                {
+                    "name": "Premium",
+                    "rows": [{"label": f"R{index}", "blocks": [1]} for index in range(1, 62)],
+                }
+            ]
+        },
+        # More than 2000 seats, including blocked ones.
+        {"tiers": [{"name": "Premium", "rows": [{"label": "A", "blocks": [2001]}]}]},
+        # Label = row label + seat number, so these two rows both generate A12.
+        {
+            "tiers": [
+                {
+                    "name": "Premium",
+                    "rows": [
+                        {"label": "A1", "blocks": [2]},
+                        {"label": "A", "blocks": [12]},
+                    ],
+                }
+            ]
+        },
+    ]
+
+    for layout in invalid_layouts:
+        response = client.post("/events", json=_seat_map_payload(layout["tiers"]), headers=admin_headers)
+        assert response.status_code == 422, (layout, response.text)
+
+    # None of the invalid layouts left a half-created event behind.
+    assert len(client.get("/events").json()) == 1
+
+
+def test_seat_generation_numbers_across_blocks() -> None:
+    reset_database()
+    client = TestClient(app)
+    admin_headers = auth_headers(client, "admin", "admin123")
+    user_headers = auth_headers(client, "attendee", "attendee123")
+
+    event = _create_seat_map_event(
+        client,
+        admin_headers,
+        [{"name": "Premium", "rows": [{"label": "A", "blocks": [3, 4, 3], "blocked": [2]}]}],
+    )
+
+    assert event["has_seat_map"] is True
+    assert event["capacity"] == 9
+    assert event["tiers"] == [{"name": "Premium", "total": 9, "available": 9}]
+
+    with SessionLocal() as db:
+        seats = (
+            db.query(Seat)
+            .filter(Seat.event_id == event["id"])
+            .order_by(Seat.seat_number.asc())
+            .all()
+        )
+        assert len(seats) == 10
+        assert [seat.seat_number for seat in seats] == list(range(1, 11))
+        assert [seat.label for seat in seats] == [f"A{number}" for number in range(1, 11)]
+        assert [seat.block_index for seat in seats] == [0, 0, 0, 1, 1, 1, 1, 2, 2, 2]
+        assert sum(1 for seat in seats if seat.is_blocked) == 1
+        assert seats[1].label == "A2"
+        assert seats[1].is_blocked is True
+
+    body = client.get(f"/events/{event['id']}/seats", headers=user_headers)
+    assert body.status_code == 200
+    seat_map = body.json()
+    row_a = seat_map["tiers"][0]["rows"][0]
+    assert [len(block) for block in row_a["blocks"]] == [3, 4, 3]
+    assert [[seat["number"] for seat in block] for block in row_a["blocks"]] == [
+        [1, 2, 3],
+        [4, 5, 6, 7],
+        [8, 9, 10],
+    ]
+    assert row_a["blocks"][0][1]["label"] == "A2"
+    assert row_a["blocks"][0][1]["state"] == "blocked"
+    assert seat_map["total"] == 9
+    assert seat_map["available"] == 9
+    assert seat_map["held"] == 0
+    assert seat_map["booked"] == 0
+
+
+def test_seat_map_structure_tiers_and_event_listing_counts() -> None:
+    reset_database()
+    client = TestClient(app)
+    admin_headers = auth_headers(client, "admin", "admin123")
+    user_headers = auth_headers(client, "attendee", "attendee123")
+
+    tiers = [
+        {
+            "name": "Premium",
+            "rows": [
+                {"label": "A", "blocks": [3, 4, 3], "blocked": [2]},
+                {"label": "B", "blocks": [2]},
+            ],
+        },
+        {"name": "General", "rows": [{"label": "C", "blocks": [4]}]},
+    ]
+    event = _create_seat_map_event(client, admin_headers, tiers)
+
+    body = client.get(f"/events/{event['id']}/seats", headers=user_headers)
+    assert body.status_code == 200
+    seat_map = body.json()
+
+    assert [tier["name"] for tier in seat_map["tiers"]] == ["Premium", "General"]
+    assert [row["label"] for row in seat_map["tiers"][0]["rows"]] == ["A", "B"]
+    assert [len(block) for block in seat_map["tiers"][0]["rows"][0]["blocks"]] == [3, 4, 3]
+    assert [seat["label"] for seat in _flatten_seat_map(seat_map)] == [
+        "A1", "A2", "A3", "A4", "A5", "A6", "A7", "A8", "A9", "A10",
+        "B1", "B2", "C1", "C2", "C3", "C4",
+    ]
+    assert seat_map["total"] == 15
+    assert seat_map["available"] == 15
+    assert seat_map["held"] == 0
+    assert seat_map["booked"] == 0
+
+    listed = next(item for item in client.get("/events").json() if item["id"] == event["id"])
+    assert listed["has_seat_map"] is True
+    assert listed["capacity"] == 15
+    assert listed["tiers"] == [
+        {"name": "Premium", "total": 11, "available": 11},
+        {"name": "General", "total": 4, "available": 4},
+    ]
+
+    # The seeded event has no layout, so it keeps the legacy shape.
+    legacy = next(item for item in client.get("/events").json() if item["id"] == 1)
+    assert legacy["has_seat_map"] is False
+    assert legacy["tiers"] == []
+
+
+def test_seat_map_errors_and_role_protection() -> None:
+    reset_database()
+    client = TestClient(app)
+    admin_headers = auth_headers(client, "admin", "admin123")
+    scanner_headers = auth_headers(client, "scanner", "scanner123")
+    user_headers = auth_headers(client, "attendee", "attendee123")
+    event = _create_seat_map_event(
+        client,
+        admin_headers,
+        [{"name": "Premium", "rows": [{"label": "A", "blocks": [2]}]}],
+    )
+
+    assert client.get(f"/events/{event['id']}/seats").status_code == 401
+    assert client.get(f"/events/{event['id']}/seats", headers=scanner_headers).status_code == 200
+    assert client.get(f"/events/{event['id']}/seats", headers=user_headers).status_code == 200
+
+    legacy = client.get("/events/1/seats", headers=user_headers)
+    assert legacy.status_code == 409
+    assert legacy.json()["detail"] == "this event has no seat map"
+
+    missing = client.get("/events/999/seats", headers=user_headers)
+    assert missing.status_code == 404
+    assert missing.json()["detail"] == "Event not found"
+
+
+def test_seat_map_states_booked_held_and_mine() -> None:
+    reset_database()
+    client = TestClient(app)
+    admin_headers = auth_headers(client, "admin", "admin123")
+    user_headers = auth_headers(client, "attendee", "attendee123")
+    event = _create_seat_map_event(
+        client,
+        admin_headers,
+        [{"name": "Premium", "rows": [{"label": "A", "blocks": [4]}]}],
+    )
+
+    now = datetime.now(UTC).replace(tzinfo=None)
+    with SessionLocal() as db:
+        user = db.query(User).filter(User.username == "attendee").one()
+        seats = (
+            db.query(Seat)
+            .filter(Seat.event_id == event["id"])
+            .order_by(Seat.seat_number.asc())
+            .all()
+        )
+        hold = SeatHold(
+            event_id=event["id"],
+            user_id=user.id,
+            status="active",
+            created_at=now,
+            expires_at=now + timedelta(minutes=10),
+        )
+        db.add(hold)
+        db.flush()
+        seats[0].hold_id = hold.id
+        seats[1].hold_id = hold.id
+
+        attendee = Attendee(name="Booked Person", campus_id="CAMP-BOOKED", contact_email="booked@example.edu")
+        db.add(attendee)
+        db.flush()
+        db.add(
+            Ticket(
+                event_id=event["id"],
+                attendee_id=attendee.id,
+                tier="general",
+                seat_number=seats[2].label,
+                seat_id=seats[2].id,
+                status="issued",
+                user_id=user.id,
+            )
+        )
+        db.commit()
+
+    body = client.get(f"/events/{event['id']}/seats", headers=user_headers)
+    assert body.status_code == 200
+    seat_map = body.json()
+    seats_out = _flatten_seat_map(seat_map)
+
+    assert [seat["state"] for seat in seats_out] == ["held", "held", "booked", "available"]
+    # "mine" only describes an active hold, not a ticket the caller booked.
+    assert [seat["mine"] for seat in seats_out] == [True, True, False, False]
+    assert seat_map["total"] == 4
+    assert seat_map["available"] == 1
+    assert seat_map["held"] == 2
+    assert seat_map["booked"] == 1
+
+    listed = next(item for item in client.get("/events").json() if item["id"] == event["id"])
+    assert listed["tiers"] == [{"name": "Premium", "total": 4, "available": 1}]
+
+
+def test_release_expired_holds_frees_seats() -> None:
+    reset_database()
+    client = TestClient(app)
+    admin_headers = auth_headers(client, "admin", "admin123")
+    user_headers = auth_headers(client, "attendee", "attendee123")
+    event = _create_seat_map_event(
+        client,
+        admin_headers,
+        [{"name": "Premium", "rows": [{"label": "A", "blocks": [2]}]}],
+    )
+
+    now = datetime.now(UTC).replace(tzinfo=None)
+    with SessionLocal() as db:
+        user = db.query(User).filter(User.username == "attendee").one()
+        seat = (
+            db.query(Seat)
+            .filter(Seat.event_id == event["id"])
+            .order_by(Seat.seat_number.asc())
+            .first()
+        )
+        hold = SeatHold(
+            event_id=event["id"],
+            user_id=user.id,
+            status="active",
+            created_at=now - timedelta(minutes=20),
+            expires_at=now - timedelta(minutes=10),
+        )
+        db.add(hold)
+        db.flush()
+        seat.hold_id = hold.id
+        db.commit()
+        hold_id = hold.id
+        seat_id = seat.id
+
+    with SessionLocal() as db:
+        assert release_expired_holds(db, event["id"]) == 1
+        assert db.get(SeatHold, hold_id).status == "expired"
+        assert db.get(Seat, seat_id).hold_id is None
+
+    body = client.get(f"/events/{event['id']}/seats", headers=user_headers)
+    assert body.status_code == 200
+    assert [seat["state"] for seat in _flatten_seat_map(body.json())] == ["available", "available"]
+
+
+def test_deleting_a_seat_map_event_removes_seats_and_holds() -> None:
+    reset_database()
+    client = TestClient(app)
+    admin_headers = auth_headers(client, "admin", "admin123")
+    event = _create_seat_map_event(
+        client,
+        admin_headers,
+        [{"name": "Premium", "rows": [{"label": "A", "blocks": [2]}]}],
+    )
+
+    now = datetime.now(UTC).replace(tzinfo=None)
+    with SessionLocal() as db:
+        user = db.query(User).filter(User.username == "attendee").one()
+        hold = SeatHold(
+            event_id=event["id"],
+            user_id=user.id,
+            status="active",
+            created_at=now,
+            expires_at=now + timedelta(minutes=10),
+        )
+        db.add(hold)
+        db.commit()
+
+    deleted = client.delete(f"/events/{event['id']}", headers=admin_headers)
+    assert deleted.status_code == 204
+
+    with SessionLocal() as db:
+        assert db.query(Seat).filter(Seat.event_id == event["id"]).count() == 0
+        assert db.query(SeatHold).filter(SeatHold.event_id == event["id"]).count() == 0
+
+
+def test_legacy_event_and_legacy_ticket_flow_are_unchanged() -> None:
+    reset_database()
+    client = TestClient(app)
+    admin_headers = auth_headers(client, "admin", "admin123")
+    user_headers = auth_headers(client, "attendee", "attendee123")
+
+    event = client.post(
+        "/events",
+        json={
+            "title": "Legacy Event",
+            "description": "",
+            "date_time": "2026-12-20T18:00:00",
+            "venue": "Hall A",
+            "capacity": 2,
+        },
+        headers=admin_headers,
+    )
+    assert event.status_code == 201
+    created = event.json()
+    assert created["has_seat_map"] is False
+    assert created["tiers"] == []
+    assert created["capacity"] == 2
+
+    ticket = client.post(
+        "/tickets",
+        json={
+            "event_id": created["id"],
+            "attendee_name": "Legacy Attendee",
+            "attendee_contact": "legacy@example.edu",
+            "tier": "general",
+        },
+        headers=user_headers,
+    )
+    assert ticket.status_code == 201
+    assert ticket.json()["seat_number"] == "GEN-001"
+
+    with SessionLocal() as db:
+        assert db.query(Seat).filter(Seat.event_id == created["id"]).count() == 0

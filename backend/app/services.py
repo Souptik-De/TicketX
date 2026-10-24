@@ -4,16 +4,18 @@ import io
 
 from fastapi import HTTPException, status
 from sqlalchemy import func
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, joinedload, subqueryload
 
-from .models import Attendee, Event, Gate, Scan, Ticket, User, Volunteer, WaitlistEntry
+from .models import Attendee, Event, Gate, Scan, Seat, SeatHold, Ticket, User, Volunteer, WaitlistEntry
 from .schemas import (
     AttendeeOut,
+    EventCreate,
     EventOut,
     EventStatsGate,
     EventStatsOut,
     EventStatsTicket,
     EventStatsTier,
+    EventTierOut,
     GateCreate,
     GateStatus,
     MyRegistrations,
@@ -26,8 +28,13 @@ from .schemas import (
     MyWaitlistEntry,
     PriorScan,
     PromotedAttendeeInfo,
+    RowOut,
     ScanCreate,
     ScanResult,
+    SeatLayoutIn,
+    SeatMapOut,
+    SeatOut,
+    TierMapOut,
     TicketCreate,
     TicketDetail,
     WaitlistEntryOut,
@@ -81,6 +88,308 @@ def _next_seat_number(db: Session, event_id: int, tier: str) -> str:
         except ValueError:
             continue
     return f"{TIER_PREFIXES[tier]}-{highest + 1:03d}"
+
+
+def _seat_rows_from_layout(event_id: int, layout: SeatLayoutIn) -> tuple[list[dict], int]:
+    """Materialise a layout into Seat insert mappings plus the blocked count.
+
+    ``row_order`` is global across tiers so ordering by it preserves the tier
+    order the admin listed without storing a separate tier index.
+    """
+    rows: list[dict] = []
+    blocked_count = 0
+    row_order = 0
+    for tier in layout.tiers:
+        for row in tier.rows:
+            blocked = set(row.blocked)
+            seat_number = 0
+            for block_index, block_size in enumerate(row.blocks):
+                for _ in range(block_size):
+                    seat_number += 1
+                    is_blocked = seat_number in blocked
+                    if is_blocked:
+                        blocked_count += 1
+                    rows.append(
+                        {
+                            "event_id": event_id,
+                            "tier_name": tier.name,
+                            "row_label": row.label,
+                            "row_order": row_order,
+                            "block_index": block_index,
+                            "seat_number": seat_number,
+                            "label": f"{row.label}{seat_number}",
+                            "is_blocked": is_blocked,
+                            "hold_id": None,
+                        }
+                    )
+            row_order += 1
+    return rows, blocked_count
+
+
+def create_event(db: Session, payload: EventCreate) -> EventOut:
+    """Create a legacy or seat-map event.
+
+    Seat rows are generated and inserted in the same transaction as the event,
+    so a failure leaves neither half behind.
+    """
+    event = Event(
+        title=payload.title.strip(),
+        description=payload.description.strip(),
+        date_time=payload.date_time,
+        venue=payload.venue.strip(),
+        capacity=payload.capacity or 0,
+        has_seat_map=payload.seat_layout is not None,
+    )
+    try:
+        db.add(event)
+        db.flush()
+
+        if payload.seat_layout is not None:
+            seat_rows, blocked_count = _seat_rows_from_layout(event.id, payload.seat_layout)
+            if seat_rows:
+                db.bulk_insert_mappings(Seat, seat_rows)
+            event.capacity = len(seat_rows) - blocked_count
+
+        db.commit()
+        db.refresh(event)
+        return _event_out(db, event)
+    except Exception:
+        db.rollback()
+        raise
+
+
+def release_expired_holds(db: Session, event_id: int) -> int:
+    """Expire stale holds and free their seats. Returns the number released.
+
+    Called before every seat read/hold/confirm/auto-assign. It intentionally
+    does not promote anyone: an abandoned hold is not a freed *sold* seat.
+    """
+    now = datetime.now(UTC).replace(tzinfo=None)
+    expired = (
+        db.query(SeatHold)
+        .filter(
+            SeatHold.event_id == event_id,
+            SeatHold.status == "active",
+            SeatHold.expires_at <= now,
+        )
+        .all()
+    )
+    if not expired:
+        return 0
+
+    hold_ids = [hold.id for hold in expired]
+    db.query(Seat).filter(Seat.hold_id.in_(hold_ids)).update(
+        {Seat.hold_id: None},
+        synchronize_session="fetch",
+    )
+    for hold in expired:
+        hold.status = "expired"
+    db.commit()
+    return len(expired)
+
+
+def _tier_summaries_for_events(db: Session, event_ids: list[int]) -> dict[int, list[EventTierOut]]:
+    """Sellable/available counts per tier for several events in a few queries."""
+    if not event_ids:
+        return {}
+
+    now = datetime.now(UTC).replace(tzinfo=None)
+    seat_rows = (
+        db.query(Seat.event_id, Seat.tier_name, Seat.id, Seat.is_blocked, Seat.hold_id)
+        .filter(Seat.event_id.in_(event_ids))
+        .order_by(
+            Seat.event_id.asc(),
+            Seat.row_order.asc(),
+            Seat.block_index.asc(),
+            Seat.seat_number.asc(),
+        )
+        .all()
+    )
+
+    booked_by_event: dict[int, set[int]] = {}
+    for event_id, seat_id in (
+        db.query(Ticket.event_id, Ticket.seat_id)
+        .filter(
+            Ticket.event_id.in_(event_ids),
+            Ticket.seat_id.isnot(None),
+            Ticket.status != "revoked",
+        )
+        .all()
+    ):
+        booked_by_event.setdefault(event_id, set()).add(seat_id)
+
+    active_holds_by_event: dict[int, set[int]] = {}
+    for hold_id, hold_event_id in (
+        db.query(SeatHold.id, SeatHold.event_id)
+        .filter(
+            SeatHold.event_id.in_(event_ids),
+            SeatHold.status == "active",
+            SeatHold.expires_at > now,
+        )
+        .all()
+    ):
+        active_holds_by_event.setdefault(hold_event_id, set()).add(hold_id)
+
+    counts: dict[int, dict[str, dict[str, int]]] = {}
+    for row in seat_rows:
+        tiers = counts.setdefault(row.event_id, {})
+        tier = tiers.setdefault(row.tier_name, {"total": 0, "available": 0})
+        if row.is_blocked:
+            continue
+        tier["total"] += 1
+        booked = booked_by_event.get(row.event_id, set())
+        held = active_holds_by_event.get(row.event_id, set())
+        if row.id not in booked and row.hold_id not in held:
+            tier["available"] += 1
+
+    return {
+        event_id: [
+            EventTierOut(name=name, total=tier["total"], available=tier["available"])
+            for name, tier in tiers.items()
+        ]
+        for event_id, tiers in counts.items()
+    }
+
+
+def _event_out(
+    db: Session,
+    event: Event,
+    tier_summaries: list[EventTierOut] | None = None,
+) -> EventOut:
+    out = EventOut.model_validate(event)
+    if event.has_seat_map:
+        if tier_summaries is None:
+            tier_summaries = _tier_summaries_for_events(db, [event.id]).get(event.id, [])
+        out.tiers = tier_summaries
+    return out
+
+
+def list_events(db: Session) -> list[EventOut]:
+    """Public catalog, with sellable/available tier counts for seat maps."""
+    seat_map_ids = [
+        event_id
+        for (event_id,) in db.query(Event.id).filter(Event.has_seat_map.is_(True)).all()
+    ]
+    for event_id in seat_map_ids:
+        release_expired_holds(db, event_id)
+
+    events = (
+        db.query(Event)
+        .options(subqueryload(Event.tickets))
+        .order_by(Event.date_time.asc())
+        .all()
+    )
+    summaries = _tier_summaries_for_events(db, seat_map_ids)
+    return [_event_out(db, event, summaries.get(event.id, [])) for event in events]
+
+
+def build_seat_map(db: Session, event_id: int, user_id: int | None) -> SeatMapOut:
+    """Derive every seat's state from blocked flags, tickets, and active holds."""
+    event = db.get(Event, event_id)
+    if event is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
+    if not event.has_seat_map:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="this event has no seat map",
+        )
+
+    release_expired_holds(db, event_id)
+
+    seats = (
+        db.query(Seat)
+        .filter(Seat.event_id == event_id)
+        .order_by(Seat.row_order.asc(), Seat.block_index.asc(), Seat.seat_number.asc())
+        .all()
+    )
+
+    booked_ids = {
+        seat_id
+        for (seat_id,) in (
+            db.query(Ticket.seat_id)
+            .filter(
+                Ticket.event_id == event_id,
+                Ticket.seat_id.isnot(None),
+                Ticket.status != "revoked",
+            )
+            .all()
+        )
+    }
+
+    now = datetime.now(UTC).replace(tzinfo=None)
+    active_holds = {
+        hold_id: hold_user_id
+        for hold_id, hold_user_id in (
+            db.query(SeatHold.id, SeatHold.user_id)
+            .filter(
+                SeatHold.event_id == event_id,
+                SeatHold.status == "active",
+                SeatHold.expires_at > now,
+            )
+            .all()
+        )
+    }
+
+    tier_order: list[str] = []
+    tier_rows: dict[str, list[RowOut]] = {}
+    row_lookup: dict[tuple[str, str], RowOut] = {}
+    total = available = held = booked = 0
+
+    for seat in seats:
+        if seat.tier_name not in tier_rows:
+            tier_rows[seat.tier_name] = []
+            tier_order.append(seat.tier_name)
+
+        row_key = (seat.tier_name, seat.row_label)
+        row_out = row_lookup.get(row_key)
+        if row_out is None:
+            row_out = RowOut(label=seat.row_label, blocks=[])
+            row_lookup[row_key] = row_out
+            tier_rows[seat.tier_name].append(row_out)
+
+        hold_user_id = active_holds.get(seat.hold_id) if seat.hold_id is not None else None
+        if seat.is_blocked:
+            state = "blocked"
+            mine = False
+        elif seat.id in booked_ids:
+            state = "booked"
+            mine = False
+        elif seat.hold_id in active_holds:
+            state = "held"
+            mine = user_id is not None and hold_user_id == user_id
+        else:
+            state = "available"
+            mine = False
+
+        if state != "blocked":
+            total += 1
+        if state == "available":
+            available += 1
+        elif state == "held":
+            held += 1
+        elif state == "booked":
+            booked += 1
+
+        while len(row_out.blocks) <= seat.block_index:
+            row_out.blocks.append([])
+        row_out.blocks[seat.block_index].append(
+            SeatOut(
+                id=seat.id,
+                number=seat.seat_number,
+                label=seat.label,
+                state=state,
+                mine=mine,
+            )
+        )
+
+    return SeatMapOut(
+        event_id=event_id,
+        tiers=[TierMapOut(name=name, rows=tier_rows[name]) for name in tier_order],
+        total=total,
+        available=available,
+        held=held,
+        booked=booked,
+    )
 
 
 def join_waitlist(

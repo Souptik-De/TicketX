@@ -7,14 +7,14 @@ import logging
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from sqlalchemy.orm import Session, joinedload, subqueryload
+from sqlalchemy.orm import Session, joinedload
 
 logger = logging.getLogger(__name__)
 
 from .auth import create_token, hash_password, require_roles, verify_password
 from .config import demo_seed_enabled
 from .database import SessionLocal, create_database, get_db
-from .models import Event, Gate, Scan, Ticket, User, Volunteer, WaitlistEntry
+from .models import Event, Gate, Scan, Seat, SeatHold, Ticket, User, Volunteer, WaitlistEntry
 from .schemas import (
     EventCreate,
     EventOut,
@@ -33,6 +33,7 @@ from .schemas import (
     RegisterRequest,
     ScanCreate,
     ScanResult,
+    SeatMapOut,
     TicketCreate,
     TicketCreated,
     TicketDetail,
@@ -48,6 +49,8 @@ from . import groq
 from .recommend import rank_events, signal_label
 from .services import (
     build_attendance_csv,
+    build_seat_map,
+    create_event,
     create_gate,
     get_event_stats,
     get_gate_status,
@@ -57,6 +60,7 @@ from .services import (
     get_or_create_google_user,
     issue_ticket,
     leave_waitlist,
+    list_events,
     record_scan,
     revoke_ticket,
 )
@@ -136,23 +140,26 @@ def me(current_user: User = Depends(require_roles("user", "admin", "scanner"))) 
 
 
 @app.get("/events", response_model=list[EventOut])
-def list_events(db: Session = Depends(get_db)) -> list[Event]:
-    return db.query(Event).options(subqueryload(Event.tickets)).order_by(Event.date_time.asc()).all()
+def list_events_endpoint(db: Session = Depends(get_db)) -> list[EventOut]:
+    return list_events(db)
 
 
 @app.post("/events", response_model=EventOut, status_code=status.HTTP_201_CREATED)
-def create_event(payload: EventCreate, _: User = Depends(require_roles("admin")), db: Session = Depends(get_db)) -> Event:
-    event = Event(
-        title=payload.title.strip(),
-        description=payload.description.strip(),
-        date_time=payload.date_time,
-        venue=payload.venue.strip(),
-        capacity=payload.capacity,
-    )
-    db.add(event)
-    db.commit()
-    db.refresh(event)
-    return event
+def create_event_endpoint(
+    payload: EventCreate,
+    _: User = Depends(require_roles("admin")),
+    db: Session = Depends(get_db),
+) -> EventOut:
+    return create_event(db, payload)
+
+
+@app.get("/events/{event_id}/seats", response_model=SeatMapOut)
+def event_seats(
+    event_id: int,
+    current_user: User = Depends(require_roles("user", "admin", "scanner")),
+    db: Session = Depends(get_db),
+) -> SeatMapOut:
+    return build_seat_map(db, event_id, current_user.id)
 
 
 @app.delete("/events/{event_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -167,6 +174,10 @@ def delete_event(event_id: int, _: User = Depends(require_roles("admin")), db: S
 
     # Delete tickets for this event
     db.query(Ticket).filter(Ticket.event_id == event_id).delete(synchronize_session=False)
+
+    # Seats reference holds, so remove seats before the holds they point at.
+    db.query(Seat).filter(Seat.event_id == event_id).delete(synchronize_session=False)
+    db.query(SeatHold).filter(SeatHold.event_id == event_id).delete(synchronize_session=False)
 
     # Delete scans performed by volunteers assigned to gates for this event
     gate_ids = db.query(Gate.id).filter(Gate.event_id == event_id).subquery()

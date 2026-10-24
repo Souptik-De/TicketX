@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, String
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .database import Base
@@ -42,6 +42,14 @@ class Event(Base):
     date_time: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     venue: Mapped[str] = mapped_column(String(160), nullable=False)
     capacity: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Legacy events sell numbered tickets against ``capacity``. Seat-map events
+    # generate a Seat row for every physical seat instead.
+    has_seat_map: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        server_default=text("0"),
+        nullable=False,
+    )
 
     tickets: Mapped[list["Ticket"]] = relationship(back_populates="event")
     gates: Mapped[list["Gate"]] = relationship(back_populates="event")
@@ -68,6 +76,47 @@ class Event(Base):
         return [{"tier": tier, "issued_count": count} for tier, count in sorted(counts.items())]
 
 
+class SeatHold(Base):
+    __tablename__ = "seat_holds"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    event_id: Mapped[int] = mapped_column(ForeignKey("events.event_id"), nullable=False, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.user_id"), nullable=False, index=True)
+    # status allowed values: "active", "confirmed", "cancelled", "expired"
+    status: Mapped[str] = mapped_column(String(20), default="active", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=lambda: datetime.now(UTC).replace(tzinfo=None),
+        nullable=False,
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+
+class Seat(Base):
+    __tablename__ = "seats"
+    __table_args__ = (
+        UniqueConstraint("event_id", "row_label", "seat_number", name="uq_seats_event_row_number"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    event_id: Mapped[int] = mapped_column(ForeignKey("events.event_id"), nullable=False, index=True)
+    tier_name: Mapped[str] = mapped_column(String(80), nullable=False)
+    row_label: Mapped[str] = mapped_column(String(24), nullable=False)
+    # Global across the event so (row_order, block_index, seat_number) alone
+    # preserves tier order without a separate tier_order column.
+    row_order: Mapped[int] = mapped_column(Integer, nullable=False)
+    block_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    seat_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    label: Mapped[str] = mapped_column(String(32), nullable=False)
+    is_blocked: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        server_default=text("0"),
+        nullable=False,
+    )
+    hold_id: Mapped[int | None] = mapped_column(ForeignKey("seat_holds.id"), nullable=True, index=True)
+
+
 class Ticket(Base):
     __tablename__ = "tickets"
 
@@ -85,6 +134,9 @@ class Ticket(Base):
     # it again after a reload. Nullable only so pre-existing rows survive the
     # migration; issuance records no owner for tickets created before this.
     user_id: Mapped[int | None] = mapped_column(ForeignKey("users.user_id"), nullable=True, index=True)
+    # Set only for seat-map events. Revocation clears it so the seat can be sold
+    # again; the text label in ``seat_number`` stays on the history row.
+    seat_id: Mapped[int | None] = mapped_column(ForeignKey("seats.id"), unique=True, nullable=True)
 
     event: Mapped[Event] = relationship(back_populates="tickets")
     attendee: Mapped[Attendee] = relationship(back_populates="tickets")

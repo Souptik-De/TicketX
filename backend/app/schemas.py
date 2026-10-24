@@ -1,8 +1,8 @@
 from datetime import datetime
 
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
 
 class LoginRequest(BaseModel):
@@ -45,6 +45,18 @@ class TierCount(BaseModel):
     issued_count: int
 
 
+class EventTierOut(BaseModel):
+    """Sellable-seat totals for one tier of a seat-map event.
+
+    Blocked seats are deliberately excluded, so the tier totals sum to the
+    event capacity and ``available`` can be compared directly with ``total``.
+    """
+
+    name: str
+    total: int
+    available: int
+
+
 class EventOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -57,6 +69,89 @@ class EventOut(BaseModel):
     issued_count: int
     revoked_count: int
     tier_counts: list[TierCount]
+    has_seat_map: bool = False
+    # Filled by the event listing for seat-map events; legacy events stay empty.
+    tiers: list[EventTierOut] = Field(default_factory=list)
+
+
+class RowIn(BaseModel):
+    label: str = Field(min_length=1, max_length=24)
+    blocks: list[Annotated[int, Field(strict=True, ge=1)]] = Field(min_length=1)
+    blocked: list[Annotated[int, Field(strict=True, ge=1)]] = Field(default_factory=list)
+
+    @field_validator("label")
+    @classmethod
+    def _validate_label(cls, value: str) -> str:
+        label = value.strip()
+        if not label:
+            raise ValueError("row label must not be empty")
+        if not label.isalnum():
+            raise ValueError("row label may contain only letters and digits")
+        return label
+
+    @model_validator(mode="after")
+    def _validate_blocked_seats(self) -> "RowIn":
+        total = sum(self.blocks)
+        for number in self.blocked:
+            if number > total:
+                raise ValueError(
+                    f"blocked seat numbers for row {self.label!r} must be between 1 and {total}"
+                )
+        return self
+
+
+class TierIn(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    rows: list[RowIn] = Field(min_length=1)
+
+    @field_validator("name")
+    @classmethod
+    def _validate_name(cls, value: str) -> str:
+        name = value.strip()
+        if not name:
+            raise ValueError("tier name must not be empty")
+        return name
+
+
+class SeatLayoutIn(BaseModel):
+    tiers: list[TierIn] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _validate_layout(self) -> "SeatLayoutIn":
+        if len(self.tiers) > 10:
+            raise ValueError("an event may have at most 10 tiers")
+
+        tier_names = [tier.name.casefold() for tier in self.tiers]
+        if len(set(tier_names)) != len(tier_names):
+            raise ValueError("tier names must be unique (case-insensitive)")
+
+        rows = [row for tier in self.tiers for row in tier.rows]
+        if len(rows) > 60:
+            raise ValueError("an event may have at most 60 rows")
+
+        row_labels = [row.label.casefold() for row in rows]
+        if len(set(row_labels)) != len(row_labels):
+            raise ValueError("row labels must be unique across the event (case-insensitive)")
+
+        total_seats = sum(sum(row.blocks) for row in rows)
+        if total_seats > 2000:
+            raise ValueError("an event may have at most 2000 seats")
+
+        # Row labels may themselves end in digits, so "A1" seat 2 and "A" seat 12
+        # both produce "A12". The map would render two indistinguishable seats.
+        generated_labels: set[str] = set()
+        for row in rows:
+            seat_count = sum(row.blocks)
+            for seat_number in range(1, seat_count + 1):
+                label = f"{row.label}{seat_number}"
+                if label in generated_labels:
+                    raise ValueError(
+                        f"seat label {label!r} is generated more than once; "
+                        "row labels and seat counts must not collide"
+                    )
+                generated_labels.add(label)
+
+        return self
 
 
 class EventCreate(BaseModel):
@@ -64,7 +159,46 @@ class EventCreate(BaseModel):
     description: str = Field(default="", max_length=600)
     date_time: datetime
     venue: str = Field(min_length=2, max_length=160)
-    capacity: int = Field(gt=0, le=50000)
+    # Capacity is required for legacy events. A seat-map event derives it from
+    # the sellable seats in the layout, so any value sent alongside is ignored.
+    capacity: int | None = None
+    seat_layout: SeatLayoutIn | None = None
+
+    @model_validator(mode="after")
+    def _validate_capacity(self) -> "EventCreate":
+        if self.seat_layout is None:
+            if self.capacity is None:
+                raise ValueError("capacity is required when no seat_layout is provided")
+            if not 1 <= self.capacity <= 50000:
+                raise ValueError("capacity must be greater than 0 and at most 50000")
+        return self
+
+
+class SeatOut(BaseModel):
+    id: int
+    number: int
+    label: str
+    state: Literal["available", "held", "booked", "blocked"]
+    mine: bool = False
+
+
+class RowOut(BaseModel):
+    label: str
+    blocks: list[list[SeatOut]]
+
+
+class TierMapOut(BaseModel):
+    name: str
+    rows: list[RowOut]
+
+
+class SeatMapOut(BaseModel):
+    event_id: int
+    tiers: list[TierMapOut]
+    total: int
+    available: int
+    held: int
+    booked: int
 
 
 class AttendeeOut(BaseModel):
