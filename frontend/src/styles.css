@@ -3188,3 +3188,486 @@ dd {
     animation: none;
   }
 }
+
+/* ═══════════════════════════════════════════════
+   BOOKING — SELECTION, CHECKOUT, WAITLIST, TICKETS
+   ═══════════════════════════════════════════════ */
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.seat-page-notice {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--brand) 40%, transparent);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--brand) 8%, var(--surface-solid));
+  color: var(--text);
+  font-weight: 800;
+}
+
+.banner-error p {
+  margin: 0 0 8px;
+}
+
+.selection-summary {
+  position: sticky;
+  bottom: 12px;
+  z-index: 20;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--surface-solid) 96%, transparent);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+
+.selection-summary-count {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.92rem;
+  font-weight: 850;
+}
+
+.selection-summary-count strong {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.selection-summary-tiers {
+  display: flex;
+  flex: 1 1 220px;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+.selection-summary-tiers strong {
+  color: var(--text);
+  font-weight: 900;
+}
+
+.selection-summary-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.checkout {
+  display: grid;
+  gap: 16px;
+}
+
+.checkout-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px 18px;
+}
+
+.checkout-head h2 {
+  margin: 0 0 4px;
+}
+
+.checkout-head .muted-text {
+  margin: 0;
+}
+
+.checkout-timer {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 1px solid color-mix(in srgb, var(--success) 40%, transparent);
+  border-radius: 999px;
+  background: var(--success-soft);
+  color: var(--success);
+  font-size: 0.82rem;
+  font-weight: 850;
+}
+
+.checkout-timer strong {
+  font-size: 1.05rem;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}
+
+.checkout-timer.is-warning {
+  border-color: color-mix(in srgb, var(--danger) 45%, transparent);
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.checkout-seats {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface-soft);
+}
+
+.checkout-seats .eyebrow {
+  margin: 0;
+}
+
+.checkout-seats ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.checkout-seats li {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-solid);
+  font-size: 0.84rem;
+}
+
+.checkout-seats li span {
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.checkout-seats .muted-text {
+  margin: 0;
+  font-size: 0.8rem;
+}
+
+.checkout-actions {
+  display: flex;
+  grid-column: 1 / -1;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.checkout-actions .ghost-button,
+.checkout-actions .primary-button {
+  min-height: 44px;
+}
+
+.booking-bar--checkout {
+  display: none;
+}
+
+.waitlist-banner {
+  /* --warning-strong is the dark amber used on the light theme's pale banner.
+     In the dark theme it would sit on a dark amber surface, so the banner picks
+     its own readable ink from the light-theme warning colour instead. */
+  --waitlist-ink: var(--warning-strong);
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid color-mix(in srgb, var(--warning) 45%, transparent);
+  border-radius: var(--radius);
+  background: var(--warning-soft);
+}
+
+:root[data-theme="dark"] .waitlist-banner {
+  --waitlist-ink: var(--warning);
+}
+
+.waitlist-banner-head {
+  display: flex;
+  align-items: start;
+  gap: 12px;
+}
+
+.waitlist-banner-head svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: var(--waitlist-ink);
+}
+
+.waitlist-banner-head h3 {
+  margin: 0 0 6px;
+  color: var(--waitlist-ink);
+  font-size: 1.05rem;
+}
+
+.waitlist-banner-head p {
+  margin: 0;
+  color: var(--waitlist-ink);
+  font-size: 0.88rem;
+  font-weight: 650;
+}
+
+.waitlist-form {
+  margin: 0;
+}
+
+.waitlist-joined {
+  display: grid;
+  gap: 6px;
+}
+
+.waitlist-joined .success-text {
+  margin: 0;
+}
+
+.waitlist-joined .muted-text {
+  margin: 0;
+}
+
+.booking-success {
+  display: grid;
+  gap: 16px;
+}
+
+.booking-success-head h2 {
+  margin: 0 0 6px;
+}
+
+.booking-success-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.booking-success-passes {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 14px;
+}
+
+.ticket-preview--compact {
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  padding: 14px;
+  box-shadow: none;
+}
+
+.ticket-preview--compact h3 {
+  margin: 0 0 4px;
+  font-size: 1.02rem;
+}
+
+.ticket-compact-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.ticket-preview--compact .ticket-meta {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 10px;
+}
+
+.ticket-preview--compact .ticket-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.my-ticket-groups {
+  display: grid;
+  gap: 20px;
+}
+
+.my-ticket-group {
+  display: grid;
+  gap: 10px;
+}
+
+.my-ticket-group-head {
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+.my-ticket-group-head h3 {
+  margin: 0 0 4px;
+  font-size: 1.02rem;
+}
+
+.my-ticket-group-head .my-ticket-facts {
+  margin: 0;
+}
+
+.my-ticket--pass {
+  display: block;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.my-ticket--pass .ticket-preview {
+  width: 100%;
+}
+
+.my-ticket--revoked {
+  border-style: dashed;
+  background: color-mix(in srgb, var(--surface-soft) 55%, var(--line));
+  color: var(--muted);
+}
+
+.my-ticket--revoked .my-ticket-title {
+  color: var(--muted);
+}
+
+.my-tickets-empty {
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  padding: 18px 12px;
+  text-align: center;
+  color: var(--muted);
+}
+
+.my-tickets-empty svg {
+  color: var(--brand);
+}
+
+.my-tickets-empty p {
+  margin: 0;
+}
+
+.user-tickets-single {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+@media (max-width: 640px) {
+  .seat-page {
+    padding-bottom: calc(92px + env(safe-area-inset-bottom));
+  }
+
+  /* The selection bar is the mobile primary action: it stays on screen while
+     the map scrolls, and the page padding above keeps it off the last row. */
+  .selection-summary {
+    position: fixed;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 60;
+    margin: 0;
+    padding: 10px 14px calc(10px + env(safe-area-inset-bottom));
+    border-right: 0;
+    border-bottom: 0;
+    border-left: 0;
+    border-radius: 0;
+    background: color-mix(in srgb, var(--surface-solid) 96%, transparent);
+    box-shadow: 0 -10px 30px color-mix(in srgb, var(--text) 14%, transparent);
+  }
+
+  .selection-summary-tiers {
+    display: none;
+  }
+
+  .selection-summary-count {
+    margin-right: auto;
+    font-size: 0.92rem;
+  }
+
+  .selection-summary-actions {
+    flex: 1 1 auto;
+    justify-content: flex-end;
+    margin-left: 0;
+  }
+
+  .selection-summary-actions .primary-button {
+    flex: 1 1 auto;
+    min-height: 44px;
+  }
+
+  .selection-summary-actions .ghost-button {
+    min-height: 44px;
+  }
+
+  .booking-bar--checkout {
+    position: fixed;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 60;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 14px calc(10px + env(safe-area-inset-bottom));
+    border-top: 1px solid var(--line);
+    background: color-mix(in srgb, var(--surface-solid) 96%, transparent);
+    box-shadow: 0 -10px 30px color-mix(in srgb, var(--text) 14%, transparent);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+  }
+
+  .booking-bar-countdown {
+    display: grid;
+    gap: 2px;
+    color: var(--muted);
+    font-size: 0.76rem;
+    font-weight: 800;
+  }
+
+  .booking-bar-countdown strong {
+    color: var(--text);
+    font-size: 1.05rem;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .booking-bar--checkout .primary-button {
+    min-height: 44px;
+    min-width: 132px;
+  }
+
+  .checkout-form .checkout-confirm {
+    display: none;
+  }
+
+  .checkout-actions {
+    display: grid;
+  }
+
+  .checkout-actions .ghost-button {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .ticket-preview--compact {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ticket-preview--compact .qr-wrap {
+    justify-self: stretch;
+  }
+
+  .ticket-preview--compact .ticket-actions {
+    justify-content: stretch;
+  }
+
+  .ticket-preview--compact .ticket-actions .ghost-button {
+    width: 100%;
+  }
+
+  .booking-success-passes {
+    grid-template-columns: 1fr;
+  }
+}

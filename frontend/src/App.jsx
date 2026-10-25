@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { CalendarDays, Compass, Home, LogOut, Moon, RadioTower, ScanLine, ShieldCheck, Sun, UserRound } from "lucide-react";
+import { CalendarDays, Compass, Home, LogOut, Moon, RadioTower, ScanLine, ShieldCheck, Sun, TicketCheck, UserRound } from "lucide-react";
 
-import { getEventSuggestions, getEvents, getGateStatus, getMyRegistrations, getVolunteers, leaveWaitlist, setAuthToken } from "./lib/api";
+import { getEventSuggestions, getEvents, getGateStatus, getMyRegistrations, getMyTickets, getVolunteers, leaveWaitlist, setAuthToken } from "./lib/api";
+import { clearAllHoldIds } from "./lib/bookingStorage";
 import { AdminPanel } from "./components/AdminPanel";
 import { EventBrowser } from "./components/EventBrowser";
 import { GateStatus } from "./components/GateStatus";
@@ -67,8 +68,24 @@ function App() {
   const [loadError, setLoadError] = useState("");
   const [myRegistrations, setMyRegistrations] = useState([]);
   const [myTickets, setMyTickets] = useState([]);
+  const [ticketHistory, setTicketHistory] = useState([]);
+  // Distinguishes "the server says this account has no queue place" from "the
+  // first registrations response has not arrived yet". The seat page needs that
+  // difference before it can trust localStorage over the server.
+  const [isRegistrationsLoaded, setIsRegistrationsLoaded] = useState(false);
   const [suggestions, setSuggestions] = useState(null);
   const retryTimer = useRef(null);
+  const checkoutGuardRef = useRef(null);
+  const handleAuthExpiredRef = useRef(null);
+
+  // The newest queue entry for the open seat event. `/me/registrations` is
+  // already polled for the in-app promotion notice, so the seat page reads the
+  // same server answer instead of trusting a position cached in localStorage.
+  const seatWaitlistEntry = (() => {
+    const eventId = Number(seatEventId);
+    if (!eventId) return null;
+    return myRegistrations.find((entry) => entry.event_id === eventId) ?? null;
+  })();
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -244,8 +261,11 @@ function App() {
       const data = await getMyRegistrations();
       setMyRegistrations(data?.waitlist ?? []);
       setMyTickets(data?.tickets ?? []);
+      setIsRegistrationsLoaded(true);
     } catch {
       // A transient failure should not blank out a position the user can see.
+      // Auth expiry is handled by the seat/ticket requests that need a live
+      // session; this poll keeps the legacy workspace's silent-failure rule.
     }
   }, [sessionUser]);
 
@@ -253,19 +273,25 @@ function App() {
     if (!sessionUser) {
       setMyRegistrations([]);
       setMyTickets([]);
+      setIsRegistrationsLoaded(false);
       return undefined;
     }
 
     let isActive = true;
+    setIsRegistrationsLoaded(false);
     const load = () => {
       getMyRegistrations()
         .then((data) => {
           if (isActive) {
             setMyRegistrations(data?.waitlist ?? []);
             setMyTickets(data?.tickets ?? []);
+            setIsRegistrationsLoaded(true);
           }
         })
-        .catch(() => undefined);
+        .catch(() => {
+          // Same rule as before Part 4: a failed background refresh leaves the
+          // last known position on screen instead of signing the user out.
+        });
     };
 
     load();
@@ -274,6 +300,56 @@ function App() {
     return () => {
       isActive = false;
       clearInterval(timer);
+    };
+  }, [sessionUser]);
+
+  // Full ticket history, including revoked rows. It is separate from
+  // `myTickets` above because EventBrowser uses that list to decide whether an
+  // event is already booked, and a revoked ticket must not count as booked.
+  // Same rules as the seat-map poll: user only, hidden tabs pause, one request
+  // at a time, and the controller is aborted on unmount.
+  useEffect(() => {
+    if (!sessionUser || sessionUser.role !== "user") {
+      setTicketHistory([]);
+      return undefined;
+    }
+
+    let cancelled = false;
+    let inFlight = false;
+    let controller = null;
+
+    async function load() {
+      if (cancelled || inFlight || document.hidden) return;
+      inFlight = true;
+      controller = new AbortController();
+      try {
+        const list = await getMyTickets({ signal: controller.signal });
+        if (!cancelled) {
+          setTicketHistory(list ?? []);
+        }
+      } catch (error) {
+        if (error?.name === "AbortError") return;
+        if (error?.status === 401) {
+          handleAuthExpiredRef.current?.();
+        }
+      } finally {
+        inFlight = false;
+        controller = null;
+      }
+    }
+
+    load();
+    const timer = setInterval(load, WAITLIST_POLL_MS);
+    function handleVisibility() {
+      if (!document.hidden) load();
+    }
+    document.addEventListener("visibilitychange", handleVisibility);
+
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", handleVisibility);
+      controller?.abort();
     };
   }, [sessionUser]);
 
@@ -330,11 +406,32 @@ function App() {
     // card to "Join waitlist" only if the event was already full, which it is by
     // definition at that point, so there is nothing to redraw.
     if (issuedTicket.outcome !== "waitlisted") {
+      // TicketIssuer hands over the full detail, so the ticket history can
+      // update on this tick instead of waiting for its poll. The legacy
+      // workspace's own list is refreshed separately from /me/registrations.
+      setTicketHistory((current) => [
+        issuedTicket,
+        ...current.filter((item) => item.ticket_id !== issuedTicket.ticket_id),
+      ]);
       getEvents().then(setEvents).catch(() => undefined);
     }
     refreshMyRegistrations();
     // Registering changes what the recommendations are based on, so the row is
     // re-fetched rather than left showing events the attendee has just joined.
+    refreshSuggestions({ allowRetry: false });
+  }
+
+  function handleBooked(confirmedTickets) {
+    if (Array.isArray(confirmedTickets) && confirmedTickets.length > 0) {
+      // Show the new passes immediately; the 15-second history poll will replace
+      // this optimistic merge with the server's list.
+      setTicketHistory((current) => {
+        const ids = new Set(confirmedTickets.map((item) => item.ticket_id));
+        return [...confirmedTickets, ...current.filter((item) => !ids.has(item.ticket_id))];
+      });
+    }
+    getEvents().then(setEvents).catch(() => undefined);
+    refreshMyRegistrations();
     refreshSuggestions({ allowRetry: false });
   }
 
@@ -349,15 +446,68 @@ function App() {
     setAllGateStatus([]);
     setMyRegistrations([]);
     setMyTickets([]);
+    setTicketHistory([]);
+    setIsRegistrationsLoaded(false);
     setSuggestions(null);
   }
 
-  function handleLogout() {
+  // A 401 from a background poll has no seat page to hand it to. Sign out, but
+  // deliberately do not clear the stored hold ids: the same account can resume
+  // after signing back in.
+  function handleAuthExpired() {
+    clearSession();
+    setRequestedRole("user");
+    setView("login");
+  }
+  handleAuthExpiredRef.current = handleAuthExpired;
+
+  async function runCheckoutGuard() {
+    const guard = checkoutGuardRef.current;
+    if (!guard) return true;
+    try {
+      const result = await guard();
+      return result !== false;
+    } catch {
+      // A broken guard must never trap the attendee.
+      return true;
+    }
+  }
+
+  // Any in-app navigation while checkout is open counts as Cancel. The guard is
+  // capped inside SeatPage, so this await cannot hold the UI hostage.
+  function navigate(action) {
+    runCheckoutGuard().then((proceed) => {
+      if (proceed) action();
+    });
+  }
+
+  // The top-bar destinations are all outside the seat page. Clearing the seat
+  // event here keeps the next visit from inheriting a stale "seats" context.
+  function navigateAwayFromSeats(action) {
+    navigate(() => {
+      setSeatEventId(null);
+      action();
+    });
+  }
+
+  async function handleLogout() {
+    const proceed = await runCheckoutGuard();
+    if (!proceed) return;
+
+    // Explicit sign-out discards this account's stored hold ids. A 401 does not.
+    clearAllHoldIds(sessionUser?.id);
     clearSession();
     setSelectedEventId(null);
     setSeatEventId(null);
     setPendingSeatEventId(null);
     setView("home");
+  }
+
+  function goBrowse() {
+    setView("browse");
+    window.setTimeout(() => {
+      document.getElementById("events")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 50);
   }
 
   function handleRoleAccess(role, eventId = "") {
@@ -407,7 +557,12 @@ function App() {
   // selected, so this one falls back to the first. Browsing must not, or the
   // register form would open on an event nobody picked.
   const chosenEvent = events.find((event) => event.id === Number(selectedEventId)) ?? null;
-  const selectedEvent = chosenEvent ?? events[0];
+  // The seat page has its own event id; without this the top bar would keep
+  // showing whichever event the browse view last selected.
+  const seatEvent = events.find((event) => event.id === Number(seatEventId)) ?? null;
+  // The ticket history spans events, so it has no single event to show in the
+  // top bar or the operations summary.
+  const selectedEvent = view === "seats" ? seatEvent : view === "tickets" ? null : chosenEvent ?? events[0];
   const workspace = workspaces[sessionUser.role] ?? workspaces.user;
   const WorkspaceIcon = workspace.icon;
 
@@ -427,14 +582,25 @@ function App() {
               <button
                 className="theme-toggle"
                 type="button"
-                onClick={() => setView("browse")}
+                onClick={() => navigateAwayFromSeats(() => setView("browse"))}
                 aria-label="Browse events"
                 title="Browse events"
               >
                 <Compass size={18} aria-hidden="true" />
               </button>
             )}
-            <button className="theme-toggle" type="button" onClick={() => setView("home")} aria-label="Return to events" title="Events">
+            {workspace.id === "user" && (
+              <button
+                className="theme-toggle"
+                type="button"
+                onClick={() => navigateAwayFromSeats(() => setView("tickets"))}
+                aria-label="My tickets"
+                title="My tickets"
+              >
+                <TicketCheck size={18} aria-hidden="true" />
+              </button>
+            )}
+            <button className="theme-toggle" type="button" onClick={() => navigateAwayFromSeats(() => setView("home"))} aria-label="Return to events" title="Events">
               <Home size={18} aria-hidden="true" />
             </button>
             <button
@@ -473,14 +639,28 @@ function App() {
 
       {loadError && <div className="banner-error">{loadError}</div>}
 
-      {view !== "seats" && <OperationsSummary ticket={ticket} gates={allGateStatus} event={selectedEvent} />}
+      {view !== "seats" && view !== "tickets" && (
+        <OperationsSummary ticket={ticket} gates={allGateStatus} event={selectedEvent} />
+      )}
 
       {view === "seats" && (
         <SeatPage
           event={events.find((event) => event.id === Number(seatEventId)) ?? null}
           isEventLoading={isLoadingEvents}
+          sessionUser={sessionUser}
           onBack={closeSeatPage}
           onUnauthorized={handleSeatUnauthorized}
+          onViewTickets={() => {
+            setSeatEventId(null);
+            setView("tickets");
+          }}
+          onBooked={handleBooked}
+          onCheckoutGuardChange={(guard) => {
+            checkoutGuardRef.current = guard;
+          }}
+          onWaitlistJoined={refreshMyRegistrations}
+          liveWaitlistEntry={seatWaitlistEntry}
+          isWaitlistLoaded={isRegistrationsLoaded}
         />
       )}
 
@@ -522,11 +702,24 @@ function App() {
                   onShowTicket={handleShowTicket}
                   onLeave={handleLeaveWaitlist}
                 />
-                <MyTickets tickets={myTickets} onShowTicket={handleShowTicket} />
+                <MyTickets tickets={myTickets} onShowTicket={handleShowTicket} onBrowse={goBrowse} />
               </div>
               <div className="right-stack">
                 <TicketPreview ticket={ticket} />
               </div>
+            </div>
+          )}
+        </section>
+      )}
+
+      {workspace.id === "user" && view === "tickets" && (
+        <section className={ticket ? "workspace-grid user-grid" : "workspace-grid user-tickets-single"}>
+          <div className="left-stack">
+            <MyTickets tickets={ticketHistory} onShowTicket={handleShowTicket} onBrowse={goBrowse} showEmpty />
+          </div>
+          {ticket && (
+            <div className="right-stack">
+              <TicketPreview ticket={ticket} />
             </div>
           )}
         </section>
@@ -551,7 +744,7 @@ function App() {
               onLeave={handleLeaveWaitlist}
             />
             <UserStats refreshKey={myTickets.length} />
-            <MyTickets tickets={myTickets} onShowTicket={handleShowTicket} />
+            <MyTickets tickets={myTickets} onShowTicket={handleShowTicket} onBrowse={goBrowse} />
           </div>
           <div className="right-stack">
             <TicketPreview ticket={ticket} />

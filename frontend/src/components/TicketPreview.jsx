@@ -36,7 +36,7 @@ function drawWrappedText(context, text, x, y, maxWidth, lineHeight, maxLines = 2
   });
 }
 
-export function TicketPreview({ ticket }) {
+export function TicketPreview({ ticket, compact = false }) {
   const qrRef = useRef(null);
   const [downloadError, setDownloadError] = useState("");
   const [copyState, setCopyState] = useState("idle");
@@ -159,7 +159,6 @@ export function TicketPreview({ ticket }) {
       setDownloadError("The QR image is not ready yet.");
       return;
     }
-
     setDownloadError("");
     const source = new XMLSerializer().serializeToString(qrElement);
     const qrBlob = new Blob([source], { type: "image/svg+xml;charset=utf-8" });
@@ -257,6 +256,53 @@ export function TicketPreview({ ticket }) {
     } finally {
       URL.revokeObjectURL(qrUrl);
     }
+  }
+
+  if (compact) {
+    const statusLabel =
+      ticket.status === "issued" ? "Issued" : ticket.status === "used" ? "Used" : ticket.status === "revoked" ? "Revoked" : ticket.status;
+    const statusClass = ticket.status === "issued" ? "in" : ticket.status === "used" ? "out" : "revoked";
+
+    return (
+      <section className="panel ticket-preview ticket-preview--compact">
+        <div className="ticket-copy">
+          <div className="ticket-compact-head">
+            <p className="eyebrow">Seat pass</p>
+            <span className={`status-pill ${statusClass}`}>{statusLabel}</span>
+          </div>
+          <h3>{ticket.event.title}</h3>
+          <p>{ticket.attendee.name}</p>
+          <dl className="ticket-meta">
+            <div>
+              <dt>Tier</dt>
+              <dd>{ticket.tier}</dd>
+            </div>
+            <div>
+              <dt>Seat</dt>
+              <dd>{ticket.seat_number}</dd>
+            </div>
+          </dl>
+        </div>
+        <div className="qr-wrap" ref={qrRef} aria-label="Ticket QR code">
+          {txValid ? (
+            <QRCodeSVG value={txPayload} size={132} level="M" includeMargin />
+          ) : (
+            <p className="error-text" role="alert">
+              TX missing — please re-issue this ticket.
+            </p>
+          )}
+          <span>Ticket #{ticket.ticket_id}</span>
+          <strong>{ticket.seat_number}</strong>
+        </div>
+        {downloadError && <p className="error-text ticket-download-error">{downloadError}</p>}
+        <div className="ticket-actions">
+          <button className="ghost-button" type="button" onClick={handleDownload} disabled={!txValid}>
+            <Download size={18} aria-hidden="true" />
+            Download ticket
+          </button>
+        </div>
+      </section>
+    );
   }
 
   return (

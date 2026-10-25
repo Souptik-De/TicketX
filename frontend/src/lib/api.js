@@ -136,26 +136,28 @@ export function getTicket(ticketId) {
 // --- Seat booking (used by the next part, declared here so it is the only
 // place that knows these paths) -------------------------------------------
 
-export function createHold(eventId, seatIds) {
+export function createHold(eventId, seatIds, options = {}) {
   return request(`/events/${eventId}/holds`, {
     method: "POST",
     body: JSON.stringify({ seat_ids: seatIds }),
+    signal: options.signal,
   });
 }
 
-export function getHold(holdId) {
-  return request(`/holds/${holdId}`);
+export function getHold(holdId, options = {}) {
+  return request(`/holds/${holdId}`, { signal: options.signal });
 }
 
-export function confirmHold(holdId, body) {
+export function confirmHold(holdId, body, options = {}) {
   return request(`/holds/${holdId}/confirm`, {
     method: "POST",
     body: JSON.stringify(body),
+    signal: options.signal,
   });
 }
 
-export function cancelHold(holdId) {
-  return request(`/holds/${holdId}`, { method: "DELETE" });
+export function cancelHold(holdId, options = {}) {
+  return request(`/holds/${holdId}`, { method: "DELETE", signal: options.signal });
 }
 
 export function joinEventWaitlist(eventId, body) {
@@ -196,8 +198,8 @@ export function getMyRegistrations() {
 }
 
 /** The caller's ticket history, revoked rows included. */
-export function getMyTickets() {
-  return request("/tickets/mine");
+export function getMyTickets(options = {}) {
+  return request("/tickets/mine", { signal: options.signal });
 }
 
 export function getMyTicketStats() {

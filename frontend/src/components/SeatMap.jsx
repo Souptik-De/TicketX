@@ -30,10 +30,17 @@ const LEGEND = [
   { key: "blocked", label: "Blocked" },
 ];
 
+function isSelectable(seat, allowMineSelection) {
+  return seat.state === "available" || (allowMineSelection && seat.mine && seat.state === "held");
+}
+
 function seatAppearance(seat, selected) {
   if (seat.state === "blocked") return "blocked";
   if (seat.state === "booked") return "booked";
-  if (seat.state === "held") return seat.mine ? "held-mine" : "held";
+  if (seat.state === "held") {
+    if (seat.mine) return selected ? "selected" : "held-mine";
+    return "held";
+  }
   return selected ? "selected" : "available";
 }
 
@@ -43,11 +50,13 @@ function seatStateLabel(appearance, seat) {
   return STATE_LABELS[seat.state] ?? "Seat";
 }
 
-const SeatButton = memo(function SeatButton({ seat, tierName, selected, readOnly, onToggle }) {
+const SeatButton = memo(function SeatButton({ seat, tierName, selected, readOnly, allowMineSelection, onToggle }) {
   const appearance = seatAppearance(seat, selected);
   const stateLabel = seatStateLabel(appearance, seat);
   // A held, booked or blocked seat cannot be picked; read-only disables the rest.
-  const disabled = readOnly || seat.state !== "available";
+  // A seat the caller already holds is selectable when the page allows replacing
+  // an old hold: the server cancels that hold and claims the new set atomically.
+  const disabled = readOnly || !isSelectable(seat, allowMineSelection);
   const description = `${seat.label}, ${tierName}, ${stateLabel}`;
 
   return (
@@ -56,6 +65,7 @@ const SeatButton = memo(function SeatButton({ seat, tierName, selected, readOnly
       className={`seatmap-seat seatmap-seat--${appearance}`}
       disabled={disabled}
       aria-label={description}
+      aria-pressed={selectablePressed(disabled, selected)}
       title={description}
       onClick={disabled ? undefined : () => onToggle(seat)}
       data-seat-id={seat.id}
@@ -65,7 +75,12 @@ const SeatButton = memo(function SeatButton({ seat, tierName, selected, readOnly
   );
 });
 
-const SeatRow = memo(function SeatRow({ tierName, row, selectedIds, readOnly, onToggle }) {
+// aria-pressed is only meaningful for a control that can be toggled.
+function selectablePressed(disabled, selected) {
+  return disabled ? undefined : selected;
+}
+
+const SeatRow = memo(function SeatRow({ tierName, row, selectedIds, readOnly, allowMineSelection, onToggle }) {
   return (
     <div className="seatmap-row">
       <span className="seatmap-row-label" aria-hidden="true">
@@ -82,6 +97,7 @@ const SeatRow = memo(function SeatRow({ tierName, row, selectedIds, readOnly, on
                 tierName={tierName}
                 selected={selectedIds.has(seat.id)}
                 readOnly={readOnly}
+                allowMineSelection={allowMineSelection}
                 onToggle={onToggle}
               />
             ))}
@@ -92,7 +108,13 @@ const SeatRow = memo(function SeatRow({ tierName, row, selectedIds, readOnly, on
   );
 });
 
-export function SeatMap({ tiers, selectedIds = EMPTY_SELECTION, onToggle, readOnly = false }) {
+export function SeatMap({
+  tiers,
+  selectedIds = EMPTY_SELECTION,
+  onToggle,
+  readOnly = false,
+  allowMineSelection = false,
+}) {
   const selected = useMemo(() => new Set(selectedIds ?? EMPTY_SELECTION), [selectedIds]);
 
   const onToggleRef = useRef(onToggle);
@@ -168,6 +190,7 @@ export function SeatMap({ tiers, selectedIds = EMPTY_SELECTION, onToggle, readOn
                     row={row}
                     selectedIds={selected}
                     readOnly={readOnly}
+                    allowMineSelection={allowMineSelection}
                     onToggle={handleToggle}
                   />
                 ))}
