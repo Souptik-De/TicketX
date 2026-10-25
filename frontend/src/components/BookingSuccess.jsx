@@ -16,7 +16,7 @@ export function BookingSuccess({ event, tickets, alreadyConfirmed = false, onVie
         <p className="muted-text">
           {alreadyConfirmed
             ? "This booking was already confirmed. Here are the passes that belong to it."
-            : "Your seats are booked. Each seat has its own pass and QR code."}
+            : "Your seats are booked. Each seat has its own pass, QR code and manual code."}
         </p>
         <div className="booking-success-actions">
           <button className="primary-button" type="button" onClick={onViewTickets}>

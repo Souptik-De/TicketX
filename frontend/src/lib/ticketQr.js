@@ -10,6 +10,22 @@ export function normalizeTxPayload(value) {
   return (value ?? "").trim();
 }
 
+/**
+ * Normalise a manually typed or pasted code before it is sent to the scanner.
+ *
+ * People copy the TX from a pass, so it can arrive with line breaks or with
+ * spaces between the visual four-character groups. The backend only strips the
+ * ends of the string, so every internal whitespace character has to go here.
+ *
+ * Case is deliberately left alone: the backend's TX pattern is case-insensitive
+ * (`re.IGNORECASE`) and lowercases the hex before comparing it, so `tx-12.AB...`
+ * and `TX-12.ab...` both validate. Changing the case on the client would only
+ * make the field differ from what the attendee sees.
+ */
+export function normalizeScanCode(value) {
+  return String(value ?? "").replace(/\s+/g, "");
+}
+
 /** True only for the canonical TX form, e.g. TX-12.<64 hex chars>. */
 export function isTxPayload(value) {
   return TX_ANCHORED_PATTERN.test(normalizeTxPayload(value));

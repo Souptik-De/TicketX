@@ -1089,6 +1089,12 @@ textarea {
   margin-top: 4px;
 }
 
+.scan-hint {
+  margin: 0;
+  font-size: 0.84rem;
+  line-height: 1.45;
+}
+
 /* ───────────────────────────────────────────────
    TICKET PREVIEW
    ─────────────────────────────────────────────── */
@@ -1161,6 +1167,214 @@ dd {
 
 .ticket-preview .ghost-button {
   grid-column: 1 / -1;
+}
+
+/* ───────────────────────────────────────────────
+   LARGE QR PASS + MANUAL CODE
+   ─────────────────────────────────────────────── */
+
+.pass-qr-block {
+  display: grid;
+  justify-items: center;
+  align-content: start;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+}
+
+.pass-qr-block--compact {
+  max-width: 340px;
+  margin: 0 auto;
+}
+
+/* Seat and tier sit above the code so a volunteer can match them at a glance. */
+.pass-seat-line {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  text-align: center;
+}
+
+.pass-tier {
+  color: var(--brand);
+  font-size: 0.9rem;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.pass-seat {
+  color: var(--text);
+  font-size: clamp(1.6rem, 4vw, 2rem);
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+}
+
+/* The button is only a click/tap target; the white frame owns the QR colours,
+   so the dark theme can never tint the modules or the quiet zone. */
+.qr-open-button {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  width: min(320px, 100%);
+  padding: 0;
+  border: 0;
+  border-radius: calc(var(--radius) + 4px);
+  background: transparent;
+  color: var(--muted);
+  cursor: zoom-in;
+}
+
+.qr-open-button:focus-visible {
+  outline: 3px solid var(--brand);
+  outline-offset: 4px;
+}
+
+.qr-frame {
+  display: block;
+  width: 100%;
+  padding: 10px;
+  border: 1px solid #d5dfdc;
+  border-radius: 12px;
+  background: #ffffff;
+  box-shadow: 0 10px 24px rgba(10, 25, 20, 0.12);
+}
+
+.qr-frame svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.qr-open-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.75rem;
+  font-weight: 800;
+}
+
+.manual-code {
+  display: grid;
+  justify-items: stretch;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-soft);
+}
+
+.manual-code-label {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 850;
+  line-height: 1.35;
+}
+
+.manual-code-value {
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 0.82rem;
+  font-weight: 700;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+/* CSS spacing, not literal spaces, keeps a selection equal to the payload.
+   Each group stays on one line so a wrap never splits a four-character block. */
+.manual-code-chunk {
+  display: inline-block;
+  margin-right: 0.45ch;
+  white-space: nowrap;
+}
+
+.manual-code-chunk:last-child {
+  margin-right: 0;
+}
+
+.manual-code-copy {
+  justify-self: start;
+  min-height: 36px;
+  padding: 7px 10px;
+  font-size: 0.78rem;
+}
+
+.ticket-preview--revoked {
+  border-style: dashed;
+}
+
+/* ───────────────────────────────────────────────
+   QR FULL-SCREEN OVERLAY
+   ─────────────────────────────────────────────── */
+
+.qr-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  overflow-y: auto;
+  background: rgba(4, 12, 10, 0.78);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+
+.qr-overlay-dialog {
+  position: relative;
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  width: min(94vw, 560px);
+  max-height: calc(100vh - 36px);
+  overflow-y: auto;
+  padding: 24px 18px 18px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--surface-solid);
+  color: var(--text);
+  box-shadow: 0 30px 90px rgba(0, 0, 0, 0.45);
+  text-align: center;
+}
+
+.qr-overlay-close {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 1;
+}
+
+.qr-overlay-dialog h2 {
+  margin: 0;
+  font-size: clamp(1.1rem, 4vw, 1.45rem);
+  line-height: 1.2;
+}
+
+.pass-seat-line--overlay {
+  margin-top: 2px;
+}
+
+.qr-frame--overlay {
+  width: min(90vw, 480px);
+  max-width: 100%;
+  padding: 12px;
+}
+
+.qr-overlay-dialog .manual-code {
+  width: min(90vw, 480px);
+  text-align: left;
+}
+
+.qr-overlay-hint {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 800;
 }
 
 /* ───────────────────────────────────────────────
@@ -1371,6 +1585,8 @@ dd {
   }
   .ticket-print-area .tx-copy-row button,
   .ticket-print-area .gate-summary button,
+  .ticket-print-area .manual-code-copy,
+  .ticket-print-area .qr-open-hint,
   .ticket-print-area .ticket-actions {
     display: none;
   }
@@ -3451,15 +3667,18 @@ dd {
   margin-top: 14px;
 }
 
+/* One pass per row on a phone keeps every QR at its full size. Two columns
+   only once the workspace is wide enough for two 320px codes. */
 .booking-success-passes {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 14px;
 }
 
 .ticket-preview--compact {
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 14px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
   padding: 14px;
   box-shadow: none;
 }
@@ -3467,6 +3686,11 @@ dd {
 .ticket-preview--compact h3 {
   margin: 0 0 4px;
   font-size: 1.02rem;
+}
+
+.ticket-preview--compact .ticket-compact-copy p {
+  margin: 0;
+  color: var(--muted);
 }
 
 .ticket-compact-head {
@@ -3482,9 +3706,13 @@ dd {
 }
 
 .ticket-preview--compact .ticket-actions {
-  grid-column: 1 / -1;
+  grid-column: auto;
   display: flex;
-  justify-content: flex-end;
+  justify-content: stretch;
+}
+
+.ticket-preview--compact .ticket-actions .ghost-button {
+  width: 100%;
 }
 
 .my-ticket-groups {
@@ -3655,10 +3883,6 @@ dd {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .ticket-preview--compact .qr-wrap {
-    justify-self: stretch;
-  }
-
   .ticket-preview--compact .ticket-actions {
     justify-content: stretch;
   }
@@ -3669,5 +3893,25 @@ dd {
 
   .booking-success-passes {
     grid-template-columns: 1fr;
+  }
+}
+
+/* Two large passes side by side once there is room for two 320px codes. */
+@media (min-width: 900px) {
+  .booking-success-passes {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .my-ticket-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  /* Legacy and revoked cards stay full width; only seat passes pair up. */
+  .my-ticket {
+    grid-column: 1 / -1;
+  }
+
+  .my-ticket--pass {
+    grid-column: auto;
   }
 }
