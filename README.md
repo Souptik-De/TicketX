@@ -4,7 +4,7 @@ TicketX is an event ticketing web application with QR-based gate validation. It 
 
 ## Stack
 
-- Backend: FastAPI + SQLite + SQLAlchemy
+- Backend: FastAPI + SQLAlchemy (SQLite locally, PostgreSQL in production)
 - Frontend: React + Vite + JavaScript
 - CI: GitHub Actions
 
@@ -28,7 +28,7 @@ already set, so your shell and your host's settings always win.
 
 | Variable | Where | Effect if unset |
 | --- | --- | --- |
-| `DATABASE_URL` | backend | Falls back to `sqlite:///./ticketx.db` |
+| `DATABASE_URL` | backend | Falls back to `sqlite:///./ticketx.db`. `postgres://` and `postgresql://` URLs are normalized to the psycopg 3 driver. |
 | `TICKETX_SECRET`, `TICKETX_PASSWORD_SALT` | backend | Dev defaults. **Change both before exposing the app.** |
 | `GOOGLE_CLIENT_ID` | backend | Password login only; the Google button stays hidden |
 | `GROQ_API_KEY` | backend | Event suggestions still work, with rule-based copy instead of model-written copy |
@@ -43,6 +43,32 @@ already set, so your shell and your host's settings always win.
 > `frontend/vercel.json` and answered with `index.html` — the UI then shows
 > `Unexpected token '<'`. Vite inlines this at **build** time, so it needs a
 > rebuild, not just a restart.
+
+## Deployment
+
+The deployed backend runs on Render and the frontend runs on Vercel.
+
+Backend service (`ticketx-api`):
+
+- Runtime: Python 3.12
+- Build command: `pip install -r backend/requirements.txt`
+- Start command: `python -m uvicorn backend.app.main:app --host 0.0.0.0 --port $PORT`
+- Health check: `/health`
+- Database: Render Postgres, provided through `DATABASE_URL`
+- Other environment variables: `TICKETX_SECRET`, `TICKETX_PASSWORD_SALT`, and
+  `TICKETX_SEED_DEMO=1` for the demo dataset
+
+Render's free web services spin down after 15 minutes of inactivity, so the
+first request after a quiet period is slower.
+
+Frontend project on Vercel (`ticket-x`, root directory `frontend`):
+
+- Set `VITE_API_BASE_URL` to the absolute Render origin, with no trailing slash
+  and no `/api` suffix.
+- Redeploy after changing it. Vite inlines the value at build time.
+
+Railway is no longer used; there is no Railway service configuration in the
+repository.
 
 ## Demo Accounts
 
@@ -320,18 +346,18 @@ the two can never disagree.
 
 ## Database
 
-TicketX runs on SQLite, locally as `ticketx.db` and in production via
-`DATABASE_URL`. There is no migration tool. `create_database()` calls
-`Base.metadata.create_all()` (which only creates new tables) and then
-`migrate_existing_database()`, which adds missing columns with hand-written
-`ALTER TABLE` statements and backfills them.
+TicketX uses SQLite locally as `ticketx.db`. In production, `DATABASE_URL` points
+at PostgreSQL; Render and Neon hand out `postgres://` or `postgresql://` URLs, and
+`normalize_database_url()` converts them to `postgresql+psycopg://` for the
+psycopg 3 driver declared in `backend/requirements.txt`.
 
-Two consequences worth knowing:
+There is no general migration tool. `create_database()` calls
+`Base.metadata.create_all()`, which creates the complete schema on a fresh
+Postgres database. `migrate_existing_database()` then repairs old SQLite files by
+adding missing columns with hand-written `ALTER TABLE` statements and backfilling
+them. On Postgres it is skipped: the database is expected to start empty.
 
-- The migrator **only runs on SQLite** and logs a warning if `DATABASE_URL`
-  points anywhere else. Pointing it at Postgres would leave existing tables
-  unmigrated.
-- Because production keeps a persistent SQLite file, `migrate_existing_database()`
-  is a real upgrade path and not just a dev convenience. `backend/tests/test_contract.py`
-  covers it against a database built with the pre-ET-07 schema; the rest of the
-  suite uses `drop_all`/`create_all` and never exercises it.
+That means SQLite retains a real in-place upgrade path, covered by
+`backend/tests/test_contract.py` against a database built with the pre-ET-07
+schema, while Postgres schema changes would need a migration tool such as Alembic
+in the future.

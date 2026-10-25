@@ -8,10 +8,32 @@ from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 logger = logging.getLogger(__name__)
 
 
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./ticketx.db")
+def normalize_database_url(url: str) -> str:
+    """Return a SQLAlchemy URL that selects the installed psycopg 3 driver.
 
-connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
-engine = create_engine(DATABASE_URL, connect_args=connect_args)
+    Render, Neon, and Heroku all hand out ``postgres://`` or ``postgresql://``
+    URLs. SQLAlchemy maps those to psycopg2 by default, but this project ships
+    psycopg 3, so the driver has to be explicit.
+    """
+    for prefix in ("postgres://", "postgresql://"):
+        if url.startswith(prefix):
+            return f"postgresql+psycopg://{url[len(prefix):]}"
+    return url
+
+
+DATABASE_URL = normalize_database_url(os.getenv("DATABASE_URL", "sqlite:///./ticketx.db"))
+
+if DATABASE_URL.startswith("sqlite"):
+    engine_options = {"connect_args": {"check_same_thread": False}}
+elif DATABASE_URL.startswith("postgresql"):
+    # Render's free databases and web services sleep independently, so a pooled
+    # connection can be dead before the request that checks it out. Pre-ping
+    # reopens it; recycling bounds how long a connection can sit idle.
+    engine_options = {"pool_pre_ping": True, "pool_recycle": 300}
+else:
+    engine_options = {}
+
+engine = create_engine(DATABASE_URL, **engine_options)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
@@ -58,12 +80,11 @@ def create_database() -> None:
 
 def migrate_existing_database() -> None:
     if not DATABASE_URL.startswith("sqlite"):
-        # TicketX deploys on SQLite. If DATABASE_URL is ever pointed at another
-        # engine the ALTERs below silently do not run, so say so loudly rather
-        # than leaving a half-migrated schema to fail at request time.
-        logger.warning(
-            "Skipping schema migration: migrate_existing_database() only supports SQLite, "
-            "but DATABASE_URL is %r. New columns will NOT be added to existing tables.",
+        # The ALTERs below repair old SQLite databases. Postgres is provisioned
+        # fresh and gets its complete schema from create_all(), so there is
+        # nothing to backfill here.
+        logger.info(
+            "Skipping legacy SQLite migrations for %s; schema is managed by create_all().",
             DATABASE_URL.split("://", 1)[0],
         )
         return

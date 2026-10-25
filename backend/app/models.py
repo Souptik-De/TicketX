@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, UniqueConstraint, text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, UniqueConstraint, false
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .database import Base
@@ -47,7 +47,7 @@ class Event(Base):
     has_seat_map: Mapped[bool] = mapped_column(
         Boolean,
         default=False,
-        server_default=text("0"),
+        server_default=false(),
         nullable=False,
     )
 
@@ -111,7 +111,7 @@ class Seat(Base):
     is_blocked: Mapped[bool] = mapped_column(
         Boolean,
         default=False,
-        server_default=text("0"),
+        server_default=false(),
         nullable=False,
     )
     hold_id: Mapped[int | None] = mapped_column(ForeignKey("seat_holds.id"), nullable=True, index=True)
