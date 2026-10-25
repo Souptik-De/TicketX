@@ -1298,6 +1298,127 @@ def test_migration_backfills_waitlist_links_on_a_legacy_database() -> None:
         legacy_engine.dispose()
         legacy_path.unlink(missing_ok=True)
 
+
+def test_migration_adds_seat_map_columns_to_a_legacy_database() -> None:
+    """Part 3's upgrade path: a database created before seat maps must gain the
+    event flag and the per-seat ticket link, twice over, without losing rows."""
+    legacy_path = Path(tempfile.gettempdir()) / f"ticketx-seat-migration-{uuid4().hex}.db"
+    legacy_url = f"sqlite:///{legacy_path.as_posix()}"
+    legacy_engine = create_engine(legacy_url, connect_args={"check_same_thread": False})
+
+    try:
+        # Given: the pre-seat-map schema. No has_seat_map, no seat_id, and no
+        # seats / seat_holds tables at all.
+        with legacy_engine.begin() as setup:
+            setup.execute(
+                text(
+                    "CREATE TABLE events (event_id INTEGER PRIMARY KEY, title VARCHAR(160) NOT NULL, "
+                    "description VARCHAR(600) NOT NULL, date_time DATETIME NOT NULL, "
+                    "venue VARCHAR(160) NOT NULL, capacity INTEGER NOT NULL)"
+                )
+            )
+            setup.execute(
+                text(
+                    "CREATE TABLE attendees (attendee_id INTEGER PRIMARY KEY, name VARCHAR(120) NOT NULL, "
+                    "campus_id VARCHAR(80) NOT NULL, contact_email VARCHAR(160) NOT NULL)"
+                )
+            )
+            setup.execute(
+                text(
+                    "CREATE TABLE tickets (ticket_id INTEGER PRIMARY KEY, qr_signature VARCHAR(180), "
+                    "tier VARCHAR(40) NOT NULL, seat_number VARCHAR(24), status VARCHAR(20) NOT NULL, "
+                    "issued_at DATETIME NOT NULL, revoked_at DATETIME, event_id INTEGER NOT NULL, "
+                    "attendee_id INTEGER NOT NULL)"
+                )
+            )
+            setup.execute(
+                text(
+                    "INSERT INTO events (event_id, title, description, date_time, venue, capacity) "
+                    "VALUES (1, 'Legacy Fest', '', '2026-10-01T10:00:00', 'Hall A', 500)"
+                )
+            )
+            setup.execute(
+                text(
+                    "INSERT INTO attendees (attendee_id, name, campus_id, contact_email) "
+                    "VALUES (1, 'Riya Sen', 'CAMP-1', 'riya@example.edu')"
+                )
+            )
+            setup.execute(
+                text(
+                    "INSERT INTO tickets (ticket_id, qr_signature, tier, seat_number, status, issued_at, event_id, attendee_id) "
+                    "VALUES (1, 'legacy-sig', 'general', 'GEN-001', 'issued', '2026-08-01 08:00:00', 1, 1)"
+                )
+            )
+
+        original_database_url = database_module.DATABASE_URL
+        original_engine = database_module.engine
+        database_module.DATABASE_URL = legacy_url
+        database_module.engine = legacy_engine
+        try:
+            database_module.migrate_existing_database()
+            # When: it runs a second time. Idempotency is the requirement, not a
+            # nice-to-have: every app start calls this.
+            database_module.migrate_existing_database()
+        finally:
+            database_module.DATABASE_URL = original_database_url
+            database_module.engine = original_engine
+
+        # Then: the columns exist, and so do the tables the seat FK points at.
+        inspector = inspect(legacy_engine)
+        assert {"seats", "seat_holds"} <= set(inspector.get_table_names())
+
+        event_columns = {column["name"] for column in inspector.get_columns("events")}
+        ticket_columns = {column["name"] for column in inspector.get_columns("tickets")}
+        assert "has_seat_map" in event_columns
+        assert "seat_id" in ticket_columns
+
+        seat_index = next(
+            index for index in inspector.get_indexes("tickets") if index["name"] == "ix_tickets_seat_id"
+        )
+        assert seat_index["unique"] == 1
+        assert seat_index["column_names"] == ["seat_id"]
+
+        # And: the old rows survived with sensible values for the new columns.
+        with legacy_engine.begin() as connection:
+            event = connection.execute(
+                text("SELECT title, capacity, has_seat_map FROM events WHERE event_id = 1")
+            ).mappings().one()
+            assert event["title"] == "Legacy Fest"
+            assert event["capacity"] == 500
+            assert event["has_seat_map"] == 0
+
+            ticket = connection.execute(
+                text("SELECT seat_number, seat_id, status FROM tickets WHERE ticket_id = 1")
+            ).mappings().one()
+            assert ticket["seat_number"] == "GEN-001"
+            assert ticket["seat_id"] is None
+            assert ticket["status"] == "issued"
+
+            assert connection.execute(text("SELECT COUNT(*) FROM tickets")).scalar() == 1
+            assert connection.execute(text("SELECT COUNT(*) FROM events")).scalar() == 1
+
+        # The index is a real constraint, not just metadata: one ticket per seat.
+        with legacy_engine.connect() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO tickets (ticket_id, qr_signature, tier, seat_number, status, issued_at, event_id, attendee_id, seat_id) "
+                    "VALUES (2, 'sig-2', 'general', 'A1', 'issued', '2026-08-02 08:00:00', 1, 1, 42)"
+                )
+            )
+            connection.commit()
+            with pytest.raises(IntegrityError):
+                connection.execute(
+                    text(
+                        "INSERT INTO tickets (ticket_id, qr_signature, tier, seat_number, status, issued_at, event_id, attendee_id, seat_id) "
+                        "VALUES (3, 'sig-3', 'general', 'A1', 'issued', '2026-08-03 08:00:00', 1, 1, 42)"
+                    )
+                )
+            connection.rollback()
+    finally:
+        legacy_engine.dispose()
+        legacy_path.unlink(missing_ok=True)
+
+
 def _capacity_one_event(client: TestClient, admin_headers: dict[str, str], title: str) -> int:
     return client.post(
         "/events",

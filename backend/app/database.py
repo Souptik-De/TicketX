@@ -68,6 +68,13 @@ def migrate_existing_database() -> None:
         )
         return
 
+    # The seat columns added below point at the seats table, which only exists
+    # once the current models have been created. create_database() already does
+    # this first, but the helper is also called directly (tests, manual
+    # repairs), so it makes itself self-sufficient. create_all is idempotent and
+    # never rewrites rows in tables that already exist.
+    Base.metadata.create_all(bind=engine)
+
     inspector = inspect(engine)
     tables = set(inspector.get_table_names())
 
@@ -96,6 +103,12 @@ def migrate_existing_database() -> None:
             event_columns = {column["name"] for column in inspector.get_columns("events")}
             if "description" not in event_columns:
                 connection.execute(text("ALTER TABLE events ADD COLUMN description VARCHAR(600) NOT NULL DEFAULT ''"))
+            if "has_seat_map" not in event_columns:
+                # Every existing event predates seat maps, so the default is the
+                # correct backfill: they stay capacity events.
+                connection.execute(
+                    text("ALTER TABLE events ADD COLUMN has_seat_map BOOLEAN NOT NULL DEFAULT 0")
+                )
 
         if "tickets" in tables:
             ticket_columns = {column["name"] for column in inspector.get_columns("tickets")}
@@ -105,6 +118,13 @@ def migrate_existing_database() -> None:
                 connection.execute(text("ALTER TABLE tickets ADD COLUMN revoked_at DATETIME"))
             if "user_id" not in ticket_columns:
                 connection.execute(text("ALTER TABLE tickets ADD COLUMN user_id INTEGER"))
+            if "seat_id" not in ticket_columns:
+                # SQLite cannot add a UNIQUE column with ALTER TABLE, so the
+                # column is plain and nullable here and uniqueness comes from
+                # the index below. Legacy tickets keep seat_id NULL.
+                connection.execute(
+                    text("ALTER TABLE tickets ADD COLUMN seat_id INTEGER REFERENCES seats(id)")
+                )
 
             rows = connection.execute(
                 text(
@@ -126,6 +146,11 @@ def migrate_existing_database() -> None:
 
             connection.execute(
                 text("CREATE INDEX IF NOT EXISTS ix_tickets_user_id ON tickets (user_id)")
+            )
+            # One ticket per seat. Also created when the column already existed,
+            # so a database that got the column but not the index is repaired.
+            connection.execute(
+                text("CREATE UNIQUE INDEX IF NOT EXISTS ix_tickets_seat_id ON tickets (seat_id)")
             )
 
         if "waitlist_entries" in tables:
