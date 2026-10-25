@@ -25,6 +25,25 @@
   --shadow: 0 24px 70px rgba(23, 33, 29, 0.12);
   --radius: 10px;
   --transition: 200ms cubic-bezier(0.4, 0, 0.2, 1);
+  /* Seat states. Kept as variables because the map has to read the same in both
+     themes, and the legend reuses the exact colours of the seats. */
+  --seat-free-bg: #ffffff;
+  --seat-free-border: #b7c9c4;
+  --seat-free-text: #2b3f3a;
+  --seat-selected-bg: #0d8068;
+  --seat-selected-border: #075c4b;
+  --seat-selected-text: #ffffff;
+  --seat-held-bg: #fff7e8;
+  --seat-held-border: #b56b09;
+  --seat-held-text: #8a4f05;
+  --seat-booked-bg: #c2410c;
+  --seat-booked-border: #9a3412;
+  --seat-booked-text: #ffffff;
+  --seat-blocked-bg: #e4eaec;
+  --seat-blocked-border: #cfd9dd;
+  --seat-blocked-text: #8b979b;
+  --seat-gap: 4px;
+  --seat-aisle: 16px;
 }
 
 :root[data-theme="dark"] {
@@ -50,6 +69,21 @@
      needs its own dark anchor to keep white label text legible. */
   --warning-strong: #8a4f05;
   --shadow: 0 28px 80px rgba(0, 0, 0, 0.35);
+  --seat-free-bg: #18232c;
+  --seat-free-border: #3d5260;
+  --seat-free-text: #e3f1ec;
+  --seat-selected-bg: #34d1a8;
+  --seat-selected-border: #7ff0d2;
+  --seat-selected-text: #06251d;
+  --seat-held-bg: #33281a;
+  --seat-held-border: #ffc56d;
+  --seat-held-text: #ffd89a;
+  --seat-booked-bg: #c2410c;
+  --seat-booked-border: #f97316;
+  --seat-booked-text: #ffffff;
+  --seat-blocked-bg: #1b242b;
+  --seat-blocked-border: #2a3945;
+  --seat-blocked-text: #6b7a83;
 }
 
 html {
@@ -2507,5 +2541,650 @@ dd {
 @media (max-width: 640px) {
   .suggested-events {
     padding: 14px;
+  }
+}
+
+/* ═══════════════════════════════════════════════
+   SEAT MAP
+   ═══════════════════════════════════════════════ */
+
+.seatmap {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.seatmap-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.seatmap-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.seatmap-swatch {
+  flex: 0 0 auto;
+  width: 15px;
+  height: 15px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--surface-solid);
+}
+
+/* Only the map scrolls sideways: the page itself must never gain a horizontal
+   scrollbar because one event happens to have a wide layout. */
+.seatmap-scroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+  max-width: 100%;
+  padding: 18px 16px 22px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background:
+    radial-gradient(circle at 50% 0%, color-mix(in srgb, var(--brand) 8%, transparent), transparent 62%),
+    var(--surface-soft);
+}
+
+.seatmap-inner {
+  display: grid;
+  justify-items: center;
+  gap: 22px;
+  width: max-content;
+  min-width: 100%;
+}
+
+.seatmap-stage {
+  width: 100%;
+  max-width: 660px;
+  padding: 9px 16px;
+  border-radius: 0 0 999px 999px;
+  background: linear-gradient(180deg, var(--brand-dark), var(--brand));
+  color: var(--surface-solid);
+  text-align: center;
+  font-size: 0.7rem;
+  font-weight: 900;
+  letter-spacing: 0.36em;
+  text-indent: 0.36em;
+  box-shadow: 0 10px 26px color-mix(in srgb, var(--brand) 28%, transparent);
+}
+
+.seatmap-tier {
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.seatmap-tier-name {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-align: center;
+}
+
+.seatmap-rows {
+  display: grid;
+  gap: 6px;
+  width: max-content;
+}
+
+.seatmap-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.seatmap-row-label {
+  flex: 0 0 auto;
+  width: 2.1em;
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 900;
+  text-align: right;
+}
+
+.seatmap-row-blocks {
+  display: flex;
+  gap: var(--seat-aisle);
+}
+
+.seatmap-block {
+  display: flex;
+  gap: var(--seat-gap);
+}
+
+/* 34px keeps the number readable while staying above the 32px minimum; touch
+   pointers get a 44px target in the media query below. */
+.seatmap-seat {
+  display: inline-grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  min-width: 34px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 7px 7px 5px 5px;
+  background: var(--surface-solid);
+  color: var(--text);
+  font-size: 0.7rem;
+  font-weight: 900;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  transition:
+    transform var(--transition),
+    background var(--transition),
+    border-color var(--transition),
+    box-shadow var(--transition);
+}
+
+.seatmap-seat:not(:disabled):hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 14px color-mix(in srgb, var(--brand) 26%, transparent);
+}
+
+.seatmap-seat:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+
+/* Held, booked and blocked seats are disabled, but they are information, not
+   dead controls: fading them would make the map harder to read. */
+.seatmap-seat:disabled {
+  cursor: not-allowed;
+  opacity: 1;
+}
+
+/* State colours are shared by the seats and the legend swatches. */
+.seatmap-seat--available {
+  background: var(--seat-free-bg);
+  border-color: var(--seat-free-border);
+  color: var(--seat-free-text);
+}
+
+.seatmap-seat--selected {
+  background: var(--seat-selected-bg);
+  border-color: var(--seat-selected-border);
+  color: var(--seat-selected-text);
+}
+
+/* Dashed border is the shape cue for "someone else is in it", so the state does
+   not rely on amber alone. */
+.seatmap-seat--held {
+  background: var(--seat-held-bg);
+  border: 1px dashed var(--seat-held-border);
+  color: var(--seat-held-text);
+}
+
+.seatmap-seat--held-mine {
+  background: var(--seat-selected-bg);
+  border-color: var(--seat-selected-border);
+  color: var(--seat-selected-text);
+}
+
+.seatmap-seat--booked {
+  background: var(--seat-booked-bg);
+  border-color: var(--seat-booked-border);
+  color: var(--seat-booked-text);
+}
+
+.seatmap-seat--blocked {
+  background: var(--seat-blocked-bg);
+  border-color: var(--seat-blocked-border);
+  color: var(--seat-blocked-text);
+}
+
+.seatmap-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.seatmap-counts span {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.seatmap-counts strong {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.seatmap-selected-count strong {
+  color: var(--brand);
+}
+
+/* ═══════════════════════════════════════════════
+   SEAT LAYOUT BUILDER
+   ═══════════════════════════════════════════════ */
+
+.seat-builder {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.builder-mode {
+  display: inline-flex;
+  gap: 4px;
+  justify-self: start;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-soft);
+}
+
+.builder-mode-button {
+  min-height: 38px;
+  padding: 8px 16px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.84rem;
+  font-weight: 900;
+  transition:
+    background var(--transition),
+    border-color var(--transition),
+    color var(--transition);
+}
+
+.builder-mode-button:hover {
+  color: var(--brand);
+}
+
+/* --surface-solid flips with the theme, so the label stays readable on the
+   brand fill in both light and dark. */
+.builder-mode-button[aria-pressed="true"] {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: var(--surface-solid);
+}
+
+.builder-mode-button:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+
+.builder-hint {
+  margin: 0;
+  font-size: 0.82rem;
+}
+
+.builder-errors {
+  margin: 0;
+  padding: 10px 12px 10px 30px;
+  border: 1px solid color-mix(in srgb, var(--danger) 40%, transparent);
+  border-radius: var(--radius);
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-size: 0.85rem;
+  font-weight: 800;
+}
+
+.builder-tier {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-soft);
+}
+
+.builder-tier-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.builder-tier-head label {
+  flex: 1 1 200px;
+}
+
+.builder-tier-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.builder-mini-button {
+  display: inline-grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-solid);
+  color: var(--muted);
+  transition:
+    border-color var(--transition),
+    color var(--transition);
+}
+
+.builder-mini-button:hover:not(:disabled) {
+  border-color: var(--brand);
+  color: var(--brand);
+}
+
+.builder-mini-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.builder-mini-button:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+
+.builder-remove:hover:not(:disabled) {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.builder-rows {
+  display: grid;
+  gap: 10px;
+}
+
+.builder-row-wrap {
+  display: grid;
+  gap: 4px;
+}
+
+.builder-row {
+  display: grid;
+  grid-template-columns: minmax(90px, 0.7fr) minmax(120px, 1.2fr) minmax(110px, 1fr) auto;
+  gap: 8px;
+  align-items: end;
+}
+
+.builder-optional {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.builder-error {
+  margin: 0;
+  color: var(--danger);
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.builder-add-row {
+  justify-self: start;
+}
+
+.builder-quick {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+  align-items: end;
+  padding: 14px;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius);
+}
+
+.builder-quick-heading {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+}
+
+.builder-quick-heading small {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.builder-quick > button {
+  grid-column: 1 / -1;
+  justify-self: start;
+}
+
+.builder-preview {
+  display: grid;
+  gap: 12px;
+  padding-top: 14px;
+  border-top: 1px dashed var(--line);
+}
+
+.builder-preview h3 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.builder-totals {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.builder-totals span {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.builder-totals strong {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ═══════════════════════════════════════════════
+   SEAT PAGE
+   ═══════════════════════════════════════════════ */
+
+.seat-page {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+
+.seat-page-panel {
+  display: grid;
+  gap: 16px;
+}
+
+.seat-page-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.seat-page-intro {
+  min-width: 0;
+}
+
+.seat-page-intro .eyebrow {
+  margin: 0 0 4px;
+}
+
+.seat-page-intro h2 {
+  margin: 0 0 8px;
+  font-size: clamp(1.5rem, 2.4vw, 2rem);
+}
+
+.seat-page-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  color: var(--muted);
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+
+.seat-page-meta span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.seat-page-meta svg {
+  flex: 0 0 auto;
+  color: var(--brand);
+}
+
+.seat-page-note {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.seat-page-status {
+  display: inline-flex;
+  align-items: center;
+  justify-self: start;
+  gap: 8px;
+  margin: 0;
+  padding: 8px 12px;
+  border: 1px solid color-mix(in srgb, var(--warning) 45%, transparent);
+  border-radius: var(--radius);
+  background: var(--warning-soft);
+  color: var(--warning);
+  font-size: 0.84rem;
+  font-weight: 900;
+}
+
+.seat-page-status svg {
+  animation: seatmap-spin 1.6s linear infinite;
+}
+
+@keyframes seatmap-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.seat-event-choices {
+  display: grid;
+  gap: 8px;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px dashed var(--line);
+}
+
+.seat-event-choices .muted-text {
+  margin: 0;
+}
+
+.seat-event-choices .ghost-button {
+  justify-self: start;
+}
+
+/* ═══════════════════════════════════════════════
+   SEAT-MAP CARDS AND LISTS
+   ═══════════════════════════════════════════════ */
+
+/* Admin tier names are already cased the way the organiser wrote them, so the
+   legacy lowercase-capitalising rules must not touch them. */
+.home-tier-list--seatmap {
+  text-transform: none;
+}
+
+.home-tier-list em {
+  color: var(--muted);
+  font-style: normal;
+  font-weight: 700;
+}
+
+.tier-counts em.seatmap-tier-chip {
+  text-transform: none;
+}
+
+.tier-counts em.seatmap-chip {
+  border-color: color-mix(in srgb, var(--brand) 45%, transparent);
+  background: color-mix(in srgb, var(--brand) 10%, var(--surface-solid));
+  color: var(--brand);
+  text-transform: none;
+}
+
+@media (pointer: coarse) {
+  .seatmap-seat {
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+    font-size: 0.8rem;
+  }
+
+  .builder-mini-button {
+    width: 44px;
+    height: 44px;
+  }
+}
+
+@media (max-width: 640px) {
+  .seatmap-scroll {
+    padding: 14px 10px 18px;
+  }
+
+  .builder-mode {
+    width: 100%;
+  }
+
+  .builder-mode-button {
+    flex: 1 1 auto;
+    padding: 8px 10px;
+    font-size: 0.78rem;
+  }
+
+  .builder-tier-head {
+    align-items: start;
+  }
+
+  .builder-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .builder-row .builder-mini-button {
+    justify-self: end;
+  }
+
+  .builder-quick {
+    grid-template-columns: 1fr;
+  }
+
+  .seat-page-head > .ghost-button {
+    align-self: flex-start;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .seatmap-seat,
+  .builder-mode-button,
+  .builder-mini-button {
+    transition: none;
+  }
+
+  .seatmap-seat:not(:disabled):hover {
+    transform: none;
+  }
+
+  .seat-page-status svg {
+    animation: none;
   }
 }

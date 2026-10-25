@@ -2,7 +2,9 @@ import { useState } from "react";
 import { Armchair, CalendarPlus, DoorOpen, MapPin, Plus, UsersRound, Trash2 } from "lucide-react";
 
 import { createEvent, createGate, deleteEvent, revokeTicket } from "../lib/api";
+import { emptyLayout, serializeLayout, validateLayout } from "../lib/layoutToSeats";
 import { EventStats } from "./EventStats";
+import { SeatLayoutBuilder } from "./SeatLayoutBuilder";
 
 export function AdminPanel({ events, gates, selectedEventId, onEventChange, onEventCreated, onGateCreated, onEventDeleted }) {
   const [title, setTitle] = useState("Freshers Night 2026");
@@ -12,14 +14,23 @@ export function AdminPanel({ events, gates, selectedEventId, onEventChange, onEv
   const [venue, setVenue] = useState("Seminar Hall");
   const [dateTime, setDateTime] = useState("2026-09-18T18:30");
   const [capacity, setCapacity] = useState(250);
+  // The whole seat layout, tiers and rows, lives in this one object: a rejected
+  // create must not cost the admin their work.
+  const [eventMode, setEventMode] = useState("simple");
+  const [seatLayout, setSeatLayout] = useState(emptyLayout);
   const [gateName, setGateName] = useState("VIP Gate");
   const [gateLocation, setGateLocation] = useState("Auditorium east entrance");
   const [volunteerName, setVolunteerName] = useState("Gate Volunteer");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const [eventMessage, setEventMessage] = useState("");
+  const [eventError, setEventError] = useState("");
   const [isSavingEvent, setIsSavingEvent] = useState(false);
   const [isSavingGate, setIsSavingGate] = useState(false);
   const [isDeletingEvent, setIsDeletingEvent] = useState(false);
+
+  const layoutValidation = validateLayout(seatLayout);
+  const seatMapInvalid = eventMode === "map" && !layoutValidation.valid;
 
   const selectedEvent = events.find((event) => event.id === Number(selectedEventId)) ?? events[0];
   const selectedEventGates = selectedEvent ? gates.filter((gate) => gate.event_id === selectedEvent.id) : [];
@@ -29,22 +40,42 @@ export function AdminPanel({ events, gates, selectedEventId, onEventChange, onEv
 
   async function handleEventSubmit(eventObject) {
     eventObject.preventDefault();
-    setError("");
-    setMessage("");
+    setEventError("");
+    setEventMessage("");
+
+    if (eventMode === "map" && !layoutValidation.valid) {
+      setEventError("Fix the seat map errors before creating the event.");
+      return;
+    }
+
     setIsSavingEvent(true);
 
     try {
-      const created = await createEvent({
+      const payload = {
         title,
         description,
         venue,
         date_time: new Date(dateTime).toISOString(),
-        capacity,
-      });
+      };
+      if (eventMode === "map") {
+        // The server derives capacity from the sellable seats, so sending one
+        // would just be a second, conflicting source of truth.
+        payload.seat_layout = serializeLayout(seatLayout);
+      } else {
+        payload.capacity = capacity;
+      }
+
+      const created = await createEvent(payload);
       onEventCreated(created);
-      setMessage(`${created.title} is ready for tickets and gates.`);
+      setEventMessage(
+        created.has_seat_map
+          ? `${created.title} is ready with ${created.capacity} seats across ${created.tiers?.length ?? 0} tiers.`
+          : `${created.title} is ready for tickets and gates.`,
+      );
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not create event");
+      // A 422's messages are already readable (api.js joins the field paths),
+      // and the layout object is untouched, so the admin can fix and retry.
+      setEventError(err instanceof Error ? err.message : "Could not create event");
     } finally {
       setIsSavingEvent(false);
     }
@@ -122,21 +153,41 @@ export function AdminPanel({ events, gates, selectedEventId, onEventChange, onEv
               Venue
               <input value={venue} onChange={(event) => setVenue(event.target.value)} required />
             </label>
-            <label>
-              Capacity
-              <input
-                type="number"
-                min={1}
-                value={capacity}
-                onChange={(event) => setCapacity(Number(event.target.value))}
-                required
-              />
-            </label>
+            {eventMode === "simple" && (
+              <label>
+                Capacity
+                <input
+                  type="number"
+                  min={1}
+                  value={capacity}
+                  onChange={(event) => setCapacity(Number(event.target.value))}
+                  required
+                />
+              </label>
+            )}
             <label className="full-width">
               Date and time
               <input type="datetime-local" value={dateTime} onChange={(event) => setDateTime(event.target.value)} required />
             </label>
-            <button className="primary-button" disabled={isSavingEvent} type="submit">
+
+            <div className="full-width">
+              <SeatLayoutBuilder
+                mode={eventMode}
+                onModeChange={setEventMode}
+                layout={seatLayout}
+                onLayoutChange={setSeatLayout}
+                validation={layoutValidation}
+                disabled={isSavingEvent}
+              />
+            </div>
+
+            {eventError && (
+              <p className="error-text" role="alert">
+                {eventError}
+              </p>
+            )}
+            {eventMessage && <p className="success-text">{eventMessage}</p>}
+            <button className="primary-button" disabled={isSavingEvent || seatMapInvalid} type="submit">
               <CalendarPlus size={18} aria-hidden="true" />
               {isSavingEvent ? "Creating..." : "Create event"}
             </button>
@@ -219,10 +270,14 @@ export function AdminPanel({ events, gates, selectedEventId, onEventChange, onEv
                   </small>
                   <small className="event-description">{event.description || "Event details will be announced soon."}</small>
                   <span className="tier-counts">
-                    {["general", "premium", "vip"].map((tier) => {
-                      const count = event.tier_counts?.find((item) => item.tier === tier)?.issued_count ?? 0;
-                      return <em key={tier}>{tier}: {count}</em>;
-                    })}
+                    {event.has_seat_map ? (
+                      <em className="seatmap-chip">Seat map - {event.capacity} seats</em>
+                    ) : (
+                      ["general", "premium", "vip"].map((tier) => {
+                        const count = event.tier_counts?.find((item) => item.tier === tier)?.issued_count ?? 0;
+                        return <em key={tier}>{tier}: {count}</em>;
+                      })
+                    )}
                   </span>
                 </span>
                 <span className="seat-total" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.5rem' }}>
@@ -264,7 +319,11 @@ export function AdminPanel({ events, gates, selectedEventId, onEventChange, onEv
           </div>
         </div>
 
-        <EventStats eventId={selectedEvent?.id} onRevokeTicket={revokeTicket} />
+        <EventStats
+          eventId={selectedEvent?.id}
+          hasSeatMap={selectedEvent?.has_seat_map ?? false}
+          onRevokeTicket={revokeTicket}
+        />
       </div>
     </section>
   );

@@ -1,4 +1,4 @@
-import { ArrowRight, LogOut, Moon, ScanLine, ShieldCheck, Sun, Ticket, UserRound } from "lucide-react";
+import { Armchair, ArrowRight, LogOut, Moon, ScanLine, ShieldCheck, Sun, Ticket, UserRound } from "lucide-react";
 
 import { EventCard } from "./EventCard";
 import { TicketXLogo } from "./TicketXLogo";
@@ -88,15 +88,26 @@ export function HomePage({ events, isLoading, error, sessionUser, theme, onTheme
         )}
 
         <div className="event-card-grid">
-          {events.map((event) => (
-            <EventCard
-              key={event.id}
-              event={event}
-              actionIcon={Ticket}
-              actionLabel={remainingSeats(event) === 0 ? "Join waitlist" : "Get ticket"}
-              onSelect={onGetTicket}
-            />
-          ))}
+          {events.map((event) => {
+            const soldOut = remainingSeats(event) === 0;
+            return (
+              <EventCard
+                key={event.id}
+                event={event}
+                actionIcon={event.has_seat_map ? Armchair : Ticket}
+                actionLabel={
+                  event.has_seat_map
+                    ? soldOut
+                      ? "View seats"
+                      : "Choose seats"
+                    : soldOut
+                      ? "Join waitlist"
+                      : "Get ticket"
+                }
+                onSelect={onGetTicket}
+              />
+            );
+          })}
         </div>
       </section>
 

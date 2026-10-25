@@ -13,6 +13,7 @@ import { OperationsSummary } from "./components/OperationsSummary";
 import { ScannerPanel } from "./components/ScannerPanel";
 import { ScanResultCard } from "./components/ScanResultCard";
 import { ScannerStats } from "./components/ScannerStats";
+import { SeatPage } from "./components/SeatPage";
 import { SuggestedEvents } from "./components/SuggestedEvents";
 import { TicketIssuer } from "./components/TicketIssuer";
 import { TicketPreview } from "./components/TicketPreview";
@@ -51,6 +52,10 @@ function App() {
   const [view, setView] = useState("home");
   const [requestedRole, setRequestedRole] = useState("user");
   const [selectedEventId, setSelectedEventId] = useState(null);
+  // The event whose seat page is open, and the one to return to after a
+  // signed-out visitor signs in. Kept apart because a sign-in may be abandoned.
+  const [seatEventId, setSeatEventId] = useState(null);
+  const [pendingSeatEventId, setPendingSeatEventId] = useState(null);
   const registrationSectionRef = useRef(null);
   const [events, setEvents] = useState([]);
   const [isLoadingEvents, setIsLoadingEvents] = useState(true);
@@ -159,10 +164,73 @@ function App() {
   }, [selectedEventId, sessionUser]);
 
   // An attendee lands on browsing, because registering is a choice between
-  // events rather than a form that defaults to the first one.
+  // events rather than a form that defaults to the first one. The exception is
+  // a seat page they asked for before signing in: that is where they were
+  // going, so that is where they land.
   function handleLogin(user) {
     setSessionUser(user);
+    if (pendingSeatEventId) {
+      setSeatEventId(pendingSeatEventId);
+      setPendingSeatEventId(null);
+      setView("seats");
+      return;
+    }
     setView(user.role === "user" ? "browse" : "workspace");
+  }
+
+  function openSeatPage(eventId) {
+    const id = Number(eventId);
+    if (!Number.isFinite(id)) return;
+
+    if (sessionUser) {
+      setSeatEventId(id);
+      setPendingSeatEventId(null);
+      setView("seats");
+      return;
+    }
+
+    // Remember where they were headed, then use the app's normal sign-in step.
+    setPendingSeatEventId(id);
+    setRequestedRole("user");
+    setView("login");
+  }
+
+  // The public homepage: a seat-map card opens the map, a legacy card keeps the
+  // old "sign in, then register" path.
+  function handleHomeEventSelect(eventId) {
+    const target = events.find((event) => event.id === Number(eventId));
+    if (target?.has_seat_map) {
+      openSeatPage(target.id);
+      return;
+    }
+    handleRoleAccess("user", eventId);
+  }
+
+  // The signed-in catalog: same split, without the login detour.
+  function handleEventSelect(eventId) {
+    const target = events.find((event) => event.id === Number(eventId));
+    if (target?.has_seat_map) {
+      openSeatPage(target.id);
+      return;
+    }
+    setSelectedEventId(eventId);
+    setTimeout(() => {
+      registrationSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 50);
+  }
+
+  // A 401 on the seat page means the token is gone. Sign out, but keep the
+  // event so the sign-in prompt can send them straight back.
+  function handleSeatUnauthorized(eventId) {
+    setPendingSeatEventId(eventId);
+    clearSession();
+    setRequestedRole("user");
+    setView("login");
+  }
+
+  function closeSeatPage() {
+    setSeatEventId(null);
+    setView(sessionUser?.role === "user" ? "browse" : "workspace");
   }
 
   // ET-07: poll the caller's own queue places. This is what makes a position
@@ -287,10 +355,16 @@ function App() {
   function handleLogout() {
     clearSession();
     setSelectedEventId(null);
+    setSeatEventId(null);
+    setPendingSeatEventId(null);
     setView("home");
   }
 
   function handleRoleAccess(role, eventId = "") {
+    // Picking a workspace from the sign-in screen ends any seat-page detour;
+    // otherwise a later sign-in would reopen a map the visitor left behind.
+    setPendingSeatEventId(null);
+
     if (eventId) {
       setSelectedEventId(eventId);
     }
@@ -320,7 +394,7 @@ function App() {
         onThemeToggle={() => setTheme((current) => (current === "light" ? "dark" : "light"))}
         onRoleAccess={handleRoleAccess}
         onLogout={handleLogout}
-        onGetTicket={(eventId) => handleRoleAccess("user", eventId)}
+        onGetTicket={handleHomeEventSelect}
       />
     );
   }
@@ -399,7 +473,16 @@ function App() {
 
       {loadError && <div className="banner-error">{loadError}</div>}
 
-      <OperationsSummary ticket={ticket} gates={allGateStatus} event={selectedEvent} />
+      {view !== "seats" && <OperationsSummary ticket={ticket} gates={allGateStatus} event={selectedEvent} />}
+
+      {view === "seats" && (
+        <SeatPage
+          event={events.find((event) => event.id === Number(seatEventId)) ?? null}
+          isEventLoading={isLoadingEvents}
+          onBack={closeSeatPage}
+          onUnauthorized={handleSeatUnauthorized}
+        />
+      )}
 
       {workspace.id === "user" && view === "browse" && (
         <section className="user-browse">
@@ -407,12 +490,7 @@ function App() {
             suggestions={suggestions}
             myTickets={myTickets}
             selectedEventId={selectedEventId}
-            onSelect={(eventId) => {
-              setSelectedEventId(eventId);
-              setTimeout(() => {
-                registrationSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-              }, 50);
-            }}
+            onSelect={handleEventSelect}
           />
 
           <EventBrowser
@@ -421,13 +499,7 @@ function App() {
             error={loadError}
             myTickets={myTickets}
             selectedEventId={selectedEventId}
-            onSelect={(eventId) => {
-              setSelectedEventId(eventId);
-              // Scroll to Step 2 after React renders the registration section
-              setTimeout(() => {
-                registrationSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-              }, 50);
-            }}
+            onSelect={handleEventSelect}
           />
 
           <UserStats refreshKey={myTickets.length} />
@@ -441,6 +513,7 @@ function App() {
                   myTickets={myTickets}
                   sessionUser={sessionUser}
                   onEventChange={() => setSelectedEventId(null)}
+                  onChooseSeats={openSeatPage}
                   onShowTicket={handleShowTicket}
                   onTicketIssued={handleTicketIssued}
                 />
@@ -468,6 +541,7 @@ function App() {
               myTickets={myTickets}
               sessionUser={sessionUser}
               onEventChange={() => setView("browse")}
+              onChooseSeats={openSeatPage}
               onShowTicket={handleShowTicket}
               onTicketIssued={handleTicketIssued}
             />
@@ -485,7 +559,7 @@ function App() {
         </section>
       )}
 
-      {workspace.id === "admin" && (
+      {workspace.id === "admin" && view !== "seats" && (
         <AdminPanel
           events={events}
           gates={gateStatus}
@@ -503,7 +577,7 @@ function App() {
         />
       )}
 
-      {workspace.id === "gate" && (
+      {workspace.id === "gate" && view !== "seats" && (
         <section className="workspace-grid">
           <div className="left-stack">
             <ScannerPanel

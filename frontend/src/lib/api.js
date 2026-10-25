@@ -11,6 +11,40 @@ export function setAuthToken(token) {
   }
 }
 
+/**
+ * Turn one FastAPI validation issue into readable text.
+ *
+ * A string detail is already written for humans. A list detail is Pydantic's
+ * 422 shape: `{loc: ["body", "seat_layout", "tiers", 0, "rows", 1, "blocks"],
+ * msg: "Input should be a valid integer"}`. The field path is what makes a
+ * layout error actionable, so it is kept; "body" is noise and is dropped.
+ */
+function formatIssue(issue) {
+  if (issue == null || typeof issue !== "object") {
+    return String(issue ?? "");
+  }
+  const raw = typeof issue.msg === "string" ? issue.msg : "";
+  // Model validators prefix their message with "Value error, "; the sentence
+  // after it is the one the backend author wrote.
+  const message = raw.replace(/^Value error,\s*/i, "");
+  const path = Array.isArray(issue.loc)
+    ? issue.loc.filter((part) => part !== "body" && part !== "query" && part !== "path").map(String).join(".")
+    : "";
+  if (message && path) return `${path}: ${message}`;
+  return message || (path ? `${path}: invalid value` : "");
+}
+
+function problemMessage(problem, fallback) {
+  if (typeof problem?.detail === "string" && problem.detail) {
+    return problem.detail;
+  }
+  if (Array.isArray(problem?.detail)) {
+    const parts = problem.detail.map(formatIssue).filter(Boolean);
+    if (parts.length > 0) return parts.join("; ");
+  }
+  return fallback;
+}
+
 async function request(path, options) {
   const authHeaders = authToken ? { Authorization: `Bearer ${authToken}` } : {};
   const response = await fetch(`${API_BASE}${path}`, {
@@ -20,13 +54,7 @@ async function request(path, options) {
 
   if (!response.ok) {
     const problem = await response.json().catch(() => ({ detail: "Request failed" }));
-    let message = "Request failed";
-    if (typeof problem.detail === "string") {
-      message = problem.detail;
-    } else if (Array.isArray(problem.detail)) {
-      message = problem.detail.map((e) => e.msg || JSON.stringify(e)).join(", ");
-    }
-    const error = new Error(message);
+    const error = new Error(problemMessage(problem, "Request failed"));
     // Callers that need to branch on the failure -- a 409 from registering twice
     // for one event, say -- cannot tell the cases apart from the message alone.
     error.status = response.status;
@@ -60,6 +88,14 @@ export function googleLogin(payload) {
 
 export function getEvents() {
   return request("/events");
+}
+
+/**
+ * The seat map for one event. `signal` lets the seat page abort a poll that is
+ * still in flight when the tab is hidden or the page is left.
+ */
+export function getEventSeats(eventId, options = {}) {
+  return request(`/events/${eventId}/seats`, { signal: options.signal });
 }
 
 export function createEvent(payload) {
@@ -97,6 +133,38 @@ export function getTicket(ticketId) {
   return request(`/tickets/${ticketId}`);
 }
 
+// --- Seat booking (used by the next part, declared here so it is the only
+// place that knows these paths) -------------------------------------------
+
+export function createHold(eventId, seatIds) {
+  return request(`/events/${eventId}/holds`, {
+    method: "POST",
+    body: JSON.stringify({ seat_ids: seatIds }),
+  });
+}
+
+export function getHold(holdId) {
+  return request(`/holds/${holdId}`);
+}
+
+export function confirmHold(holdId, body) {
+  return request(`/holds/${holdId}/confirm`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export function cancelHold(holdId) {
+  return request(`/holds/${holdId}`, { method: "DELETE" });
+}
+
+export function joinEventWaitlist(eventId, body) {
+  return request(`/events/${eventId}/waitlist`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
 export function scanTicket(payload) {
   return request("/scans", {
     method: "POST",
@@ -125,6 +193,11 @@ export function revokeTicket(ticketId) {
  */
 export function getMyRegistrations() {
   return request("/me/registrations");
+}
+
+/** The caller's ticket history, revoked rows included. */
+export function getMyTickets() {
+  return request("/tickets/mine");
 }
 
 export function getMyTicketStats() {
@@ -160,13 +233,7 @@ export async function exportAttendanceCsv(eventId) {
 
   if (!response.ok) {
     const problem = await response.json().catch(() => ({ detail: "Export failed" }));
-    let message = "Export failed";
-    if (typeof problem.detail === "string") {
-      message = problem.detail;
-    } else if (Array.isArray(problem.detail)) {
-      message = problem.detail.map((e) => e.msg || JSON.stringify(e)).join(", ");
-    }
-    throw new Error(message);
+    throw new Error(problemMessage(problem, "Export failed"));
   }
 
   const blob = await response.blob();

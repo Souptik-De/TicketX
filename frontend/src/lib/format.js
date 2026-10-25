@@ -27,6 +27,29 @@ export function tierIssuedCount(event, tier) {
   return event.tier_counts?.find((item) => item.tier === tier)?.issued_count ?? 0;
 }
 
+/** The tier summaries the API returns for a seat-map event, and [] for legacy. */
+export function eventTiers(event) {
+  return Array.isArray(event?.tiers) ? event.tiers : [];
+}
+
+/** Seats on sale for a seat-map event: blocked seats are not part of capacity. */
+export function seatMapCapacity(event) {
+  return eventTiers(event).reduce((sum, tier) => sum + (tier.total ?? 0), 0);
+}
+
+/**
+ * Seats still available to book.
+ *
+ * A seat-map event cannot use capacity - issued_count: a held seat has no ticket
+ * yet but is not available either, and that sum would overstate what is left.
+ * The tier summaries already carry the server's answer, so they are used as-is.
+ */
 export function remainingSeats(event) {
-  return Math.max(event.capacity - event.issued_count, 0);
+  if (event?.has_seat_map) {
+    return Math.max(
+      eventTiers(event).reduce((sum, tier) => sum + (tier.available ?? 0), 0),
+      0,
+    );
+  }
+  return Math.max((event?.capacity ?? 0) - (event?.issued_count ?? 0), 0);
 }

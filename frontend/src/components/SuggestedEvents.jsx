@@ -1,4 +1,4 @@
-import { Sparkles, Ticket, TicketCheck } from "lucide-react";
+import { Armchair, Sparkles, Ticket, TicketCheck } from "lucide-react";
 
 import { EventCard } from "./EventCard";
 import { remainingSeats } from "../lib/format";
@@ -40,6 +40,7 @@ export function SuggestedEvents({ suggestions, myTickets, selectedEventId, onSel
 
       <div className="event-card-grid">
         {items.map((item) => {
+          const isSeatMap = Boolean(item.event.has_seat_map);
           const isRegistered = registeredEventIds.has(item.event.id);
           const soldOut = remainingSeats(item.event) === 0;
 
@@ -49,8 +50,18 @@ export function SuggestedEvents({ suggestions, myTickets, selectedEventId, onSel
                 event={item.event}
                 isSelected={item.event.id === Number(selectedEventId)}
                 isComplete={isRegistered}
-                actionIcon={isRegistered ? TicketCheck : Ticket}
-                actionLabel={isRegistered ? "You're registered" : soldOut ? "Join waitlist" : "Register"}
+                actionIcon={isSeatMap ? Armchair : isRegistered ? TicketCheck : Ticket}
+                actionLabel={
+                  isSeatMap
+                    ? soldOut
+                      ? "View seats"
+                      : "Choose seats"
+                    : isRegistered
+                      ? "You're registered"
+                      : soldOut
+                        ? "Join waitlist"
+                        : "Register"
+                }
                 onSelect={onSelect}
               />
               <p className="suggestion-reason">

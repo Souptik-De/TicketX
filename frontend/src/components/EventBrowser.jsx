@@ -1,7 +1,7 @@
-import { ArrowLeft, CalendarDays, Ticket, TicketCheck } from "lucide-react";
+import { Armchair, ArrowLeft, CalendarDays, Ticket, TicketCheck } from "lucide-react";
 
 import { EventCard } from "./EventCard";
-import { formatDate, remainingSeats, TIERS, tierIssuedCount } from "../lib/format";
+import { eventTiers, formatDate, remainingSeats, TIERS, tierIssuedCount } from "../lib/format";
 
 /**
  * The browse step that a signed-in attendee lands on: pick an event, then
@@ -34,6 +34,7 @@ export function EventBrowser({ events, isLoading, error, myTickets, selectedEven
 
       <div className="event-card-grid">
         {events.map((event) => {
+          const isSeatMap = Boolean(event.has_seat_map);
           const isRegistered = registeredEventIds.has(event.id);
           const soldOut = remainingSeats(event) === 0;
 
@@ -43,8 +44,18 @@ export function EventBrowser({ events, isLoading, error, myTickets, selectedEven
               event={event}
               isSelected={event.id === Number(selectedEventId)}
               isComplete={isRegistered}
-              actionIcon={isRegistered ? TicketCheck : Ticket}
-              actionLabel={isRegistered ? "You're registered" : soldOut ? "Join waitlist" : "Register"}
+              actionIcon={isSeatMap ? Armchair : isRegistered ? TicketCheck : Ticket}
+              actionLabel={
+                isSeatMap
+                  ? soldOut
+                    ? "View seats"
+                    : "Choose seats"
+                  : isRegistered
+                    ? "You're registered"
+                    : soldOut
+                      ? "Join waitlist"
+                      : "Register"
+              }
               onSelect={onSelect}
             />
           );
@@ -91,11 +102,17 @@ export function SelectedEventSummary({ event, myTickets, onChangeEvent, onShowTi
       </div>
       {event.revoked_count > 0 && <p className="muted-text">{event.revoked_count} revoked, seats released</p>}
       <div className="tier-counts">
-        {TIERS.map((tier) => (
-          <em key={tier}>
-            {tier}: {tierIssuedCount(event, tier)}
-          </em>
-        ))}
+        {event.has_seat_map
+          ? eventTiers(event).map((tier) => (
+              <em key={tier.name} className="seatmap-tier-chip">
+                {tier.name}: {tier.available}/{tier.total} available
+              </em>
+            ))
+          : TIERS.map((tier) => (
+              <em key={tier}>
+                {tier}: {tierIssuedCount(event, tier)}
+              </em>
+            ))}
       </div>
 
       {heldTickets.length > 0 && (
@@ -118,11 +135,15 @@ export function SelectedEventSummary({ event, myTickets, onChangeEvent, onShowTi
           Choose a different event
         </button>
         <span className="muted-text">
-          {heldTickets.length > 0
-            ? "Registering again here is for a different attendee."
-            : soldOut
-              ? "Joining the waitlist puts you in the queue"
-              : "A seat is reserved the moment you register"}
+          {event.has_seat_map
+            ? soldOut
+              ? "The map shows what is still available"
+              : "Seats are chosen on the map"
+            : heldTickets.length > 0
+              ? "Registering again here is for a different attendee."
+              : soldOut
+                ? "Joining the waitlist puts you in the queue"
+                : "A seat is reserved the moment you register"}
         </span>
       </div>
     </article>

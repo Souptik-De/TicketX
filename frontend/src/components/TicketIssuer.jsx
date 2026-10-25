@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import { Clock, Send } from "lucide-react";
+import { Armchair, Clock, Send } from "lucide-react";
 
 import { getTicket, issueTicket } from "../lib/api";
+import { remainingSeats } from "../lib/format";
 import { SelectedEventSummary } from "./EventBrowser";
 
 /**
@@ -12,8 +13,11 @@ import { SelectedEventSummary } from "./EventBrowser";
  * Every field stays editable, because this form has always been able to book
  * someone other than the account holder. With no `event` it falls back to its
  * own dropdown, which is how the other workspaces still use it.
+ *
+ * Seat-map events never reach the General/Premium/VIP form: their tiers are
+ * admin-defined, so the only sensible entry is the seat page.
  */
-export function TicketIssuer({ events, initialEventId, event, myTickets, sessionUser, onEventChange, onShowTicket, onTicketIssued }) {
+export function TicketIssuer({ events, initialEventId, event, myTickets, sessionUser, onEventChange, onChooseSeats, onShowTicket, onTicketIssued }) {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [campusId, setCampusId] = useState("");
@@ -25,8 +29,15 @@ export function TicketIssuer({ events, initialEventId, event, myTickets, session
   const [waitlistMessage, setWaitlistMessage] = useState("");
 
   const isDrivenByBrowse = Boolean(event);
-  const selectedEvent = event ?? events.find((item) => item.id === Number(fallbackEventId)) ?? events[0];
-  const remainingSeats = selectedEvent ? Math.max(selectedEvent.capacity - selectedEvent.issued_count, 0) : 0;
+  const legacyEvents = events.filter((item) => !item.has_seat_map);
+  const seatMapEvents = events.filter((item) => item.has_seat_map);
+  const selectedEvent =
+    event ??
+    events.find((item) => item.id === Number(fallbackEventId)) ??
+    legacyEvents[0] ??
+    events[0] ??
+    null;
+  const seatsLeft = selectedEvent ? remainingSeats(selectedEvent) : 0;
 
   // Prefill from the account once it is known. A password account carries no
   // email, so that field is left for the attendee rather than guessed at.
@@ -50,6 +61,52 @@ export function TicketIssuer({ events, initialEventId, event, myTickets, session
     setError("");
     setAlreadyRegistered(false);
   }, [event?.id, fallbackEventId]);
+
+  // The legacy form's tier list is General/Premium/VIP, which does not exist on
+  // a seat-map event. Offering it would issue a ticket in the wrong tier, so
+  // the event is handed over to the seat page instead.
+  if (selectedEvent?.has_seat_map) {
+    return (
+      <section className="panel">
+        <div className="section-heading">
+          <p className="eyebrow">{isDrivenByBrowse ? "Step 2 of 2" : "User Panel"}</p>
+          <h2>Choose seats</h2>
+        </div>
+        <SelectedEventSummary
+          event={selectedEvent}
+          myTickets={isDrivenByBrowse ? myTickets : []}
+          onChangeEvent={onEventChange}
+          onShowTicket={onShowTicket}
+        />
+        <p className="muted-text">
+          This event is sold by seat, so there is no General/Premium/VIP choice. The seat map shows exactly what is
+          still available.
+        </p>
+        <button className="primary-button" type="button" onClick={() => onChooseSeats(selectedEvent.id)}>
+          <Armchair size={18} aria-hidden="true" />
+          Choose seats
+        </button>
+        {!isDrivenByBrowse && seatMapEvents.length > 1 && (
+          <div className="seat-event-choices">
+            <p className="muted-text">Other seat-map events:</p>
+            {seatMapEvents
+              .filter((item) => item.id !== selectedEvent.id)
+              .map((item) => (
+                <button
+                  className="ghost-button"
+                  key={item.id}
+                  type="button"
+                  onClick={() => onChooseSeats(item.id)}
+                >
+                  <Armchair size={16} aria-hidden="true" />
+                  {item.title}
+                </button>
+              ))}
+          </div>
+        )}
+      </section>
+    );
+  }
 
   async function handleSubmit(submitEvent) {
     submitEvent.preventDefault();
@@ -113,10 +170,10 @@ export function TicketIssuer({ events, initialEventId, event, myTickets, session
   }
 
   const submitLabel = isSubmitting
-    ? remainingSeats > 0
+    ? seatsLeft > 0
       ? "Issuing..."
       : "Joining waitlist..."
-    : remainingSeats > 0
+    : seatsLeft > 0
       ? "Register and get ticket"
       : "Join waitlist";
 
@@ -134,7 +191,7 @@ export function TicketIssuer({ events, initialEventId, event, myTickets, session
               <option value="" disabled>
                 Select an event
               </option>
-              {events.map((item) => (
+              {legacyEvents.map((item) => (
                 <option key={item.id} value={item.id}>
                   {item.title} - {item.venue}
                 </option>
@@ -204,6 +261,18 @@ export function TicketIssuer({ events, initialEventId, event, myTickets, session
           {submitLabel}
         </button>
       </form>
+
+      {!isDrivenByBrowse && seatMapEvents.length > 0 && (
+        <div className="seat-event-choices">
+          <p className="muted-text">Seat-map events are booked by choosing a seat:</p>
+          {seatMapEvents.map((item) => (
+            <button className="ghost-button" key={item.id} type="button" onClick={() => onChooseSeats(item.id)}>
+              <Armchair size={16} aria-hidden="true" />
+              {item.title}
+            </button>
+          ))}
+        </div>
+      )}
     </section>
   );
 }

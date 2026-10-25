@@ -16,7 +16,7 @@ import {
 
 import { exportAttendanceCsv, getEventStats, revokeTicket } from "../lib/api";
 
-export function EventStats({ eventId, onRevokeTicket }) {
+export function EventStats({ eventId, hasSeatMap = false, onRevokeTicket }) {
   const [stats, setStats] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
@@ -129,11 +129,14 @@ export function EventStats({ eventId, onRevokeTicket }) {
   const tierChartData = useMemo(() => {
     if (!stats) return [];
     return stats.tier_breakdown.map((row) => ({
-      tier: row.tier.charAt(0).toUpperCase() + row.tier.slice(1),
+      // Legacy tiers are stored lowercase ("premium") and have always been shown
+      // capitalised. Seat-map tiers are admin-defined names, so their casing is
+      // already the intended one and must not be rewritten.
+      tier: hasSeatMap ? row.tier : row.tier.charAt(0).toUpperCase() + row.tier.slice(1),
       Issued: row.issued,
       Checked: row.checked_in,
     }));
-  }, [stats]);
+  }, [stats, hasSeatMap]);
 
   const gateChartData = useMemo(() => {
     if (!stats) return [];
@@ -384,7 +387,7 @@ export function EventStats({ eventId, onRevokeTicket }) {
                   <tbody>
                     {stats.tier_breakdown.map((row) => (
                       <tr key={row.tier}>
-                        <td className="capitalize">{row.tier}</td>
+                        <td className={hasSeatMap ? undefined : "capitalize"}>{row.tier}</td>
                         <td>{row.issued}</td>
                         <td>{row.checked_in}</td>
                       </tr>
