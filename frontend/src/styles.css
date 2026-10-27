@@ -3404,67 +3404,79 @@ dd {
     animation: none;
   }
 }
-/* Catalog search bar (fuzzy event search) */
-.catalog-search-panel {
-  display: grid;
-  gap: 14px;
-}
-
-.catalog-search-row {
+/* Catalog search bar (fuzzy event search).
+   Pills on the page surface: one border token, one focus ring, no fallbacks —
+   the real dark and light themes supply every value. */
+.catalog-search {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 10px;
-  border-radius: 14px;
-  border: 1px solid var(--border-color, rgba(148, 163, 184, 0.35));
-  background: var(--card-bg, rgba(255, 255, 255, 0.06));
+}
+
+.catalog-search-field,
+.catalog-search-category {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
   padding: 10px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--text);
+  transition:
+    border-color var(--transition),
+    box-shadow var(--transition);
 }
 
-.catalog-search-row:focus-within {
-  border-color: var(--accent-color, #6366f1);
-  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.25);
+.catalog-search-field:focus-within,
+.catalog-search-category:focus-within {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 25%, transparent);
 }
 
-.catalog-search-row svg {
-  flex-shrink: 0;
-  opacity: 0.65;
-}
-
-.catalog-search-input {
-  flex: 1;
-  min-width: 0;
+.catalog-search-field input,
+.catalog-search-category select {
   border: none;
   background: transparent;
   font: inherit;
   color: inherit;
-  outline: none;
+  min-width: 0;
 }
 
-.catalog-search-input::placeholder {
-  opacity: 0.55;
+.catalog-search-field input {
+  flex: 1;
 }
 
-.catalog-search-tag {
+.catalog-search-field input::placeholder {
+  color: var(--muted);
+  opacity: 1;
+}
+
+.catalog-search-field input:focus-visible,
+.catalog-search-category select:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: -2px;
+}
+
+.catalog-search-icon {
   flex-shrink: 0;
-  font-size: 0.72rem;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  opacity: 0.6;
+  color: var(--muted);
 }
 
-.catalog-search-select {
-  border: 1px solid var(--border-color, rgba(148, 163, 184, 0.35));
-  border-radius: 10px;
-  padding: 6px 10px;
-  font: inherit;
+.catalog-search-category select {
+  cursor: pointer;
+}
+
+.catalog-search-status {
   font-size: 0.85rem;
-  color: inherit;
-  background: transparent;
+  color: var(--muted);
 }
 
 .catalog-search-count {
   font-size: 0.85rem;
-  opacity: 0.7;
+  color: var(--muted);
   margin: 0;
 }
 
@@ -3481,12 +3493,12 @@ dd {
   align-items: center;
   gap: 4px;
   border-radius: 999px;
-  border: 1px solid var(--border-color, rgba(148, 163, 184, 0.35));
+  border: 1px solid color-mix(in srgb, var(--brand) 25%, transparent);
+  background: var(--surface-soft);
   padding: 2px 10px;
   font-size: 0.75rem;
   font-style: normal;
   font-weight: 500;
-  opacity: 0.85;
 }
 
 .meta-chip-category {
@@ -3494,8 +3506,9 @@ dd {
 }
 
 .meta-chip-cancelled {
-  border-color: rgba(239, 68, 68, 0.6);
-  color: var(--danger-color, #ef4444);
+  border-color: var(--danger);
+  background: var(--danger-soft);
+  color: var(--danger);
   font-style: normal;
   font-weight: 700;
 }
@@ -3507,28 +3520,18 @@ dd {
   gap: 10px;
 }
 
-.ghost-button {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  border-radius: 10px;
-  border: 1px solid var(--border-color, rgba(148, 163, 184, 0.4));
-  background: transparent;
-  color: inherit;
-  padding: 10px 16px;
-  font: inherit;
-  font-weight: 600;
-  cursor: pointer;
+@media (max-width: 640px) {
+  .catalog-search {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .catalog-search-field,
+  .catalog-search-category {
+    width: 100%;
+  }
 }
 
-.ghost-button:disabled {
-  opacity: 0.55;
-  cursor: not-allowed;
-}
-
-.ghost-button:hover:not(:disabled) {
-  border-color: var(--accent-color, #6366f1);
-}
 
 /* ═══════════════════════════════════════════════
    BOOKING — SELECTION, CHECKOUT, WAITLIST, TICKETS

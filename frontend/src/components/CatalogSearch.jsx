@@ -26,7 +26,7 @@ export function CatalogSearch({ query, setQuery, category, setCategory, isSearch
           type="search"
           value={query}
           onChange={(changeEvent) => setQuery(changeEvent.target.value)}
-          placeholder="Search events by title, artist, venue, city..."
+          placeholder="Search events by title, artist, venue, city…"
           aria-label="Search events"
         />
         {isSearching && <span className="catalog-search-status" aria-hidden="true">…</span>}
