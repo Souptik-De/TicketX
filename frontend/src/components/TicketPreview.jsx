@@ -1,8 +1,17 @@
-import { useRef, useState } from "react";
-import { Check, Clock, Copy, Download, Printer, Share2, TicketCheck } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { Check, Clock, Copy, Download, Maximize2, Printer, Share2, TicketCheck, X } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 
 import { isTxPayload, normalizeTxPayload } from "../lib/ticketQr";
+
+// The QR is an SVG, so it stays crisp at any size. 320px leaves roughly a
+// 298px code after the white frame's padding, which is the desktop target;
+// on a 375px phone the frame shrinks to the card width but stays above 220px.
+const QR_SCREEN_SIZE = 320;
+const QR_OVERLAY_SIZE = 480;
+const QR_FG = "#000000";
+const QR_BG = "#ffffff";
 
 function safeFileName(value) {
   return value
@@ -36,8 +45,200 @@ function drawWrappedText(context, text, x, y, maxWidth, lineHeight, maxLines = 2
   });
 }
 
-export function TicketPreview({ ticket }) {
+/** Split the exact payload into visual groups without inserting characters. */
+function codeChunks(value, size = 4) {
+  const chunks = [];
+  for (let index = 0; index < value.length; index += size) {
+    chunks.push(value.slice(index, index + size));
+  }
+  return chunks;
+}
+
+/** Break a long unbroken string at character boundaries for the PNG pass. */
+function wrapFixedText(context, text, maxWidth, maxLines = 3) {
+  const lines = [];
+  let currentLine = "";
+
+  for (const character of text) {
+    const candidate = currentLine + character;
+    if (currentLine && context.measureText(candidate).width > maxWidth) {
+      lines.push(currentLine);
+      currentLine = character;
+    } else {
+      currentLine = candidate;
+    }
+  }
+  if (currentLine) {
+    lines.push(currentLine);
+  }
+
+  if (lines.length <= maxLines) {
+    return lines;
+  }
+  const kept = lines.slice(0, maxLines);
+  kept[maxLines - 1] = `${kept[maxLines - 1].slice(0, -1)}…`;
+  return kept;
+}
+
+function ManualCode({ code, copyState, onCopy, compact = false }) {
+  return (
+    <div className={`manual-code${compact ? " manual-code--compact" : ""}`}>
+      <p className="manual-code-label">Manual code (use this if the QR won&apos;t scan)</p>
+      <code className="manual-code-value" title={code || "No manual code"}>
+        {codeChunks(code).map((chunk, index) => (
+          <span className="manual-code-chunk" key={`${chunk}-${index}`}>
+            {chunk}
+          </span>
+        ))}
+      </code>
+      <button className="ghost-button manual-code-copy" type="button" onClick={onCopy} disabled={!code}>
+        {copyState === "copied" ? <Check size={16} aria-hidden="true" /> : <Copy size={16} aria-hidden="true" />}
+        {copyState === "copied" ? "Copied" : copyState === "failed" ? "Copy failed" : "Copy code"}
+      </button>
+      <span className="sr-only" role="status" aria-live="polite">
+        {copyState === "copied"
+          ? "Manual code copied to the clipboard."
+          : copyState === "failed"
+            ? "Could not copy the manual code."
+            : ""}
+      </span>
+    </div>
+  );
+}
+
+function QrBlock({ ticket, txPayload, triggerRef, onOpen, qrRef, copyState, onCopy, compact = false }) {
+  const seatTitle = `seat ${ticket.seat_number} at ${ticket.event.title}`;
+
+  return (
+    <div className={`pass-qr-block${compact ? " pass-qr-block--compact" : ""}`}>
+      <div className="pass-seat-line">
+        <span className="pass-tier">{ticket.tier}</span>
+        <strong className="pass-seat">{ticket.seat_number}</strong>
+      </div>
+      <button
+        className="qr-open-button"
+        type="button"
+        ref={triggerRef}
+        onClick={onOpen}
+        aria-label={`Open a larger QR code for ${seatTitle}`}
+        aria-haspopup="dialog"
+      >
+        <span className="qr-frame" ref={qrRef}>
+          <QRCodeSVG
+            value={txPayload}
+            size={QR_SCREEN_SIZE}
+            level="M"
+            bgColor={QR_BG}
+            fgColor={QR_FG}
+            marginSize={4}
+            title={`QR code for ${seatTitle}`}
+          />
+        </span>
+        <span className="qr-open-hint">
+          <Maximize2 size={14} aria-hidden="true" />
+          Tap to enlarge
+        </span>
+      </button>
+      <ManualCode code={txPayload} copyState={copyState} onCopy={onCopy} compact={compact} />
+    </div>
+  );
+}
+
+function QrOverlay({ ticket, txPayload, copyState, onCopy, onClose, titleId }) {
+  const dialogRef = useRef(null);
+  const closeRef = useRef(null);
+
+  useEffect(() => {
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    closeRef.current?.focus();
+
+    function handleKeyDown(event) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onClose();
+        return;
+      }
+      if (event.key !== "Tab") return;
+
+      const focusable = dialogRef.current?.querySelectorAll(
+        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      );
+      const items = focusable ? Array.from(focusable) : [];
+      if (items.length === 0) return;
+
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [onClose]);
+
+  const seatTitle = `seat ${ticket.seat_number} at ${ticket.event.title}`;
+
+  return createPortal(
+    <div
+      className="qr-overlay"
+      onClick={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <div
+        className="qr-overlay-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        ref={dialogRef}
+      >
+        <button
+          ref={closeRef}
+          className="icon-button qr-overlay-close"
+          type="button"
+          onClick={onClose}
+          aria-label="Close larger QR code"
+        >
+          <X size={22} aria-hidden="true" />
+        </button>
+        <p className="eyebrow">Scan at the gate</p>
+        <h2 id={titleId}>{ticket.event.title}</h2>
+        <div className="pass-seat-line pass-seat-line--overlay">
+          <span className="pass-tier">{ticket.tier}</span>
+          <strong className="pass-seat">{ticket.seat_number}</strong>
+        </div>
+        <div className="qr-frame qr-frame--overlay">
+          <QRCodeSVG
+            value={txPayload}
+            size={QR_OVERLAY_SIZE}
+            level="M"
+            bgColor={QR_BG}
+            fgColor={QR_FG}
+            marginSize={4}
+            title={`Large QR code for ${seatTitle}`}
+          />
+        </div>
+        <ManualCode code={txPayload} copyState={copyState} onCopy={onCopy} />
+        <p className="qr-overlay-hint">Raise your screen brightness</p>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+export function TicketPreview({ ticket, compact = false }) {
   const qrRef = useRef(null);
+  const triggerRef = useRef(null);
+  const [overlayOpen, setOverlayOpen] = useState(false);
   const [downloadError, setDownloadError] = useState("");
   const [copyState, setCopyState] = useState("idle");
   const [summaryState, setSummaryState] = useState("idle");
@@ -45,6 +246,12 @@ export function TicketPreview({ ticket }) {
 
   const txPayload = normalizeTxPayload(ticket?.qr_signature);
   const txValid = isTxPayload(txPayload);
+  const overlayTitleId = `qr-overlay-title-${ticket?.ticket_id ?? "ticket"}`;
+
+  const closeOverlay = useCallback(() => {
+    setOverlayOpen(false);
+    window.requestAnimationFrame(() => triggerRef.current?.focus());
+  }, []);
 
   async function copyText(value) {
     try {
@@ -153,13 +360,28 @@ export function TicketPreview({ ticket }) {
     );
   }
 
+  // A revoked pass must never present a scannable credential. My Tickets
+  // already renders its own revoked card; this guard covers any other caller.
+  if (ticket.status === "revoked") {
+    return (
+      <section className="panel ticket-preview ticket-preview--revoked">
+        <div className="ticket-copy">
+          <p className="eyebrow">Ticket revoked</p>
+          <h2>{ticket.event.title}</h2>
+          <p>{ticket.attendee.name}</p>
+          <p className="muted-text">This ticket is no longer valid. No QR code or manual code is shown.</p>
+        </div>
+        <span className="status-pill revoked">Revoked</span>
+      </section>
+    );
+  }
+
   async function handleDownload() {
     const qrElement = qrRef.current?.querySelector("svg");
     if (!qrElement) {
       setDownloadError("The QR image is not ready yet.");
       return;
     }
-
     setDownloadError("");
     const source = new XMLSerializer().serializeToString(qrElement);
     const qrBlob = new Blob([source], { type: "image/svg+xml;charset=utf-8" });
@@ -224,21 +446,34 @@ export function TicketPreview({ ticket }) {
         drawWrappedText(context, String(value), x, y + 38, 315, 30, 2);
       });
 
+      // The QR takes roughly half the pass height. The white panel behind it
+      // keeps the quiet zone intact even if the pass is printed on tinted paper.
       context.fillStyle = "#f4f8f7";
       context.fillRect(875, 82, 420, 636);
-      context.fillStyle = "#14201d";
-      context.font = "700 22px Arial, sans-serif";
       context.textAlign = "center";
-      context.fillText(`TICKET #${ticket.ticket_id}`, 1085, 135);
-      context.drawImage(qrImage, 915, 170, 340, 340);
-      context.fillStyle = "#0d8068";
-      context.font = "700 38px Arial, sans-serif";
-      context.fillText(ticket.seat_number, 1085, 570);
       context.fillStyle = "#5f716d";
-      context.font = "600 18px Arial, sans-serif";
-      context.fillText(`${ticket.tier.toUpperCase()} SEATING`, 1085, 606);
-      context.font = "600 16px Arial, sans-serif";
-      context.fillText("Present this QR at the assigned event gate", 1085, 670);
+      context.font = "700 16px Arial, sans-serif";
+      context.fillText(`TICKET #${ticket.ticket_id}`, 1085, 116);
+      context.fillStyle = "#14201d";
+      context.font = "700 34px Arial, sans-serif";
+      context.fillText(ticket.seat_number, 1085, 162);
+      context.fillStyle = "#0d8068";
+      context.font = "700 18px Arial, sans-serif";
+      context.fillText(`${ticket.tier.toUpperCase()} SEATING`, 1085, 190);
+
+      context.fillStyle = "#ffffff";
+      context.fillRect(895, 208, 380, 380);
+      context.drawImage(qrImage, 905, 218, 360, 360);
+
+      context.fillStyle = "#5f716d";
+      context.font = "700 13px Arial, sans-serif";
+      context.fillText("MANUAL CODE (IF QR FAILS)", 1085, 618);
+      context.fillStyle = "#14201d";
+      context.font = "600 14px 'Courier New', monospace";
+      const codeLines = wrapFixedText(context, txPayload, 370, 3);
+      codeLines.forEach((line, index) => {
+        context.fillText(line, 1085, 642 + index * 18);
+      });
       context.textAlign = "left";
 
       const pngBlob = await new Promise((resolve, reject) => {
@@ -259,89 +494,144 @@ export function TicketPreview({ ticket }) {
     }
   }
 
+  if (compact) {
+    const statusLabel =
+      ticket.status === "issued" ? "Issued" : ticket.status === "used" ? "Used" : ticket.status === "revoked" ? "Revoked" : ticket.status;
+    const statusClass = ticket.status === "issued" ? "in" : ticket.status === "used" ? "out" : "revoked";
+
+    return (
+      <>
+        <section className="panel ticket-preview ticket-preview--compact">
+          <div className="ticket-compact-head">
+            <p className="eyebrow">Seat pass</p>
+            <span className={`status-pill ${statusClass}`}>{statusLabel}</span>
+          </div>
+          <div className="ticket-compact-copy">
+            <h3>{ticket.event.title}</h3>
+            <p>{ticket.attendee.name}</p>
+          </div>
+          {txValid ? (
+            <QrBlock
+              ticket={ticket}
+              txPayload={txPayload}
+              triggerRef={triggerRef}
+              onOpen={() => setOverlayOpen(true)}
+              qrRef={qrRef}
+              copyState={copyState}
+              onCopy={handleCopyTx}
+              compact
+            />
+          ) : (
+            <p className="error-text" role="alert">
+              TX missing — please re-issue this ticket.
+            </p>
+          )}
+          {downloadError && <p className="error-text ticket-download-error">{downloadError}</p>}
+          <div className="ticket-actions">
+            <button className="ghost-button" type="button" onClick={handleDownload} disabled={!txValid}>
+              <Download size={18} aria-hidden="true" />
+              Download ticket
+            </button>
+          </div>
+        </section>
+        {overlayOpen && txValid && (
+          <QrOverlay
+            ticket={ticket}
+            txPayload={txPayload}
+            copyState={copyState}
+            onCopy={handleCopyTx}
+            onClose={closeOverlay}
+            titleId={overlayTitleId}
+          />
+        )}
+      </>
+    );
+  }
+
   return (
-    <section className="panel ticket-preview ticket-print-area">
-      <div className="ticket-copy">
-        <p className="eyebrow">My Ticket</p>
-        <h2>{ticket.event.title}</h2>
-        <p>{ticket.attendee.name}</p>
-        <dl className="ticket-meta">
-          <div>
-            <dt>Venue</dt>
-            <dd>{ticket.event.venue}</dd>
-          </div>
-          <div>
-            <dt>Tier</dt>
-            <dd>{ticket.tier}</dd>
-          </div>
-          <div>
-            <dt>Seat</dt>
-            <dd>{ticket.seat_number}</dd>
-          </div>
-          <div>
-            <dt>Status</dt>
-            <dd>{ticket.status}</dd>
-          </div>
-        </dl>
-      </div>
-      <div className="qr-wrap" ref={qrRef} aria-label="Ticket QR code">
+    <>
+      <section className="panel ticket-preview ticket-print-area">
+        <div className="ticket-copy">
+          <p className="eyebrow">My Ticket</p>
+          <h2>{ticket.event.title}</h2>
+          <p>{ticket.attendee.name}</p>
+          <dl className="ticket-meta">
+            <div>
+              <dt>Venue</dt>
+              <dd>{ticket.event.venue}</dd>
+            </div>
+            <div>
+              <dt>Tier</dt>
+              <dd>{ticket.tier}</dd>
+            </div>
+            <div>
+              <dt>Seat</dt>
+              <dd>{ticket.seat_number}</dd>
+            </div>
+            <div>
+              <dt>Status</dt>
+              <dd>{ticket.status}</dd>
+            </div>
+          </dl>
+        </div>
         {txValid ? (
-          <QRCodeSVG value={txPayload} size={180} level="M" includeMargin />
+          <QrBlock
+            ticket={ticket}
+            txPayload={txPayload}
+            triggerRef={triggerRef}
+            onOpen={() => setOverlayOpen(true)}
+            qrRef={qrRef}
+            copyState={copyState}
+            onCopy={handleCopyTx}
+          />
         ) : (
           <p className="error-text" role="alert">
             TX missing — please re-issue this ticket.
           </p>
         )}
-        <span>Ticket #{ticket.ticket_id}</span>
-        <strong>{ticket.seat_number}</strong>
-      </div>
-      <div className="tx-copy-row">
-        <code className="tx-payload" title={txPayload || "No TX payload"}>
-          {txPayload || "No TX payload"}
-        </code>
-        <button
-          className="ghost-button tx-copy-button"
-          type="button"
-          onClick={handleCopyTx}
-          disabled={!txPayload}
-          aria-label="Copy ticket TX payload"
-        >
-          {copyState === "copied" ? <Check size={16} aria-hidden="true" /> : <Copy size={16} aria-hidden="true" />}
-          {copyState === "copied" ? "Copied" : copyState === "failed" ? "Copy failed" : "Copy TX"}
-        </button>
-      </div>
-      {!txValid && (
-        <p className="error-text tx-hint" role="alert">
-          This ticket has no valid TX payload. Re-issue it before heading to the gate.
-        </p>
-      )}
-      <p className="muted-text tx-hint">Scan this QR or paste the TX above at the gate. Both use the same TX.</p>
-      <div className="gate-summary">
-        <div className="section-heading">
-          <p className="eyebrow">Gate Summary</p>
-          <h3>Show this if the camera fails</h3>
+        {!txValid && (
+          <p className="error-text tx-hint" role="alert">
+            This ticket has no valid TX payload. Re-issue it before heading to the gate.
+          </p>
+        )}
+        <p className="muted-text tx-hint">Scan this QR or type the manual code at the gate. Both use the same TX.</p>
+        <div className="gate-summary">
+          <div className="section-heading">
+            <p className="eyebrow">Gate Summary</p>
+            <h3>Show this if the camera fails</h3>
+          </div>
+          <pre className="gate-summary-text">{buildGateSummary()}</pre>
+          <button className="ghost-button" type="button" onClick={handleCopySummary} aria-label="Copy gate summary">
+            {summaryState === "copied" ? <Check size={16} aria-hidden="true" /> : <Copy size={16} aria-hidden="true" />}
+            {summaryState === "copied" ? "Summary copied" : summaryState === "failed" ? "Copy failed" : "Copy summary"}
+          </button>
         </div>
-        <pre className="gate-summary-text">{buildGateSummary()}</pre>
-        <button className="ghost-button" type="button" onClick={handleCopySummary} aria-label="Copy gate summary">
-          {summaryState === "copied" ? <Check size={16} aria-hidden="true" /> : <Copy size={16} aria-hidden="true" />}
-          {summaryState === "copied" ? "Summary copied" : summaryState === "failed" ? "Copy failed" : "Copy summary"}
-        </button>
-      </div>
-      {downloadError && <p className="error-text ticket-download-error">{downloadError}</p>}
-      <div className="ticket-actions">
-        <button className="ghost-button" type="button" onClick={handleDownload} disabled={!txValid}>
-          <Download size={18} aria-hidden="true" />
-          Download ticket
-        </button>
-        <button className="ghost-button" type="button" onClick={handlePrint}>
-          <Printer size={18} aria-hidden="true" />
-          Print
-        </button>
-        <button className="ghost-button" type="button" onClick={handleShare} disabled={!txValid}>
-          <Share2 size={18} aria-hidden="true" />
-          {shareState === "shared" ? "Shared" : shareState === "copied" ? "Copied" : shareState === "failed" ? "Share failed" : "Share"}
-        </button>
-      </div>
-    </section>
+        {downloadError && <p className="error-text ticket-download-error">{downloadError}</p>}
+        <div className="ticket-actions">
+          <button className="ghost-button" type="button" onClick={handleDownload} disabled={!txValid}>
+            <Download size={18} aria-hidden="true" />
+            Download ticket
+          </button>
+          <button className="ghost-button" type="button" onClick={handlePrint}>
+            <Printer size={18} aria-hidden="true" />
+            Print
+          </button>
+          <button className="ghost-button" type="button" onClick={handleShare} disabled={!txValid}>
+            <Share2 size={18} aria-hidden="true" />
+            {shareState === "shared" ? "Shared" : shareState === "copied" ? "Copied" : shareState === "failed" ? "Share failed" : "Share"}
+          </button>
+        </div>
+      </section>
+      {overlayOpen && txValid && (
+        <QrOverlay
+          ticket={ticket}
+          txPayload={txPayload}
+          copyState={copyState}
+          onCopy={handleCopyTx}
+          onClose={closeOverlay}
+          titleId={overlayTitleId}
+        />
+      )}
+    </>
   );
 }

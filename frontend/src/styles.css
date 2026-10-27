@@ -1089,6 +1089,12 @@ textarea {
   margin-top: 4px;
 }
 
+.scan-hint {
+  margin: 0;
+  font-size: 0.84rem;
+  line-height: 1.45;
+}
+
 /* ───────────────────────────────────────────────
    TICKET PREVIEW
    ─────────────────────────────────────────────── */
@@ -1161,6 +1167,214 @@ dd {
 
 .ticket-preview .ghost-button {
   grid-column: 1 / -1;
+}
+
+/* ───────────────────────────────────────────────
+   LARGE QR PASS + MANUAL CODE
+   ─────────────────────────────────────────────── */
+
+.pass-qr-block {
+  display: grid;
+  justify-items: center;
+  align-content: start;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+}
+
+.pass-qr-block--compact {
+  max-width: 340px;
+  margin: 0 auto;
+}
+
+/* Seat and tier sit above the code so a volunteer can match them at a glance. */
+.pass-seat-line {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  text-align: center;
+}
+
+.pass-tier {
+  color: var(--brand);
+  font-size: 0.9rem;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.pass-seat {
+  color: var(--text);
+  font-size: clamp(1.6rem, 4vw, 2rem);
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+}
+
+/* The button is only a click/tap target; the white frame owns the QR colours,
+   so the dark theme can never tint the modules or the quiet zone. */
+.qr-open-button {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  width: min(320px, 100%);
+  padding: 0;
+  border: 0;
+  border-radius: calc(var(--radius) + 4px);
+  background: transparent;
+  color: var(--muted);
+  cursor: zoom-in;
+}
+
+.qr-open-button:focus-visible {
+  outline: 3px solid var(--brand);
+  outline-offset: 4px;
+}
+
+.qr-frame {
+  display: block;
+  width: 100%;
+  padding: 10px;
+  border: 1px solid #d5dfdc;
+  border-radius: 12px;
+  background: #ffffff;
+  box-shadow: 0 10px 24px rgba(10, 25, 20, 0.12);
+}
+
+.qr-frame svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.qr-open-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.75rem;
+  font-weight: 800;
+}
+
+.manual-code {
+  display: grid;
+  justify-items: stretch;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-soft);
+}
+
+.manual-code-label {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 850;
+  line-height: 1.35;
+}
+
+.manual-code-value {
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 0.82rem;
+  font-weight: 700;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+/* CSS spacing, not literal spaces, keeps a selection equal to the payload.
+   Each group stays on one line so a wrap never splits a four-character block. */
+.manual-code-chunk {
+  display: inline-block;
+  margin-right: 0.45ch;
+  white-space: nowrap;
+}
+
+.manual-code-chunk:last-child {
+  margin-right: 0;
+}
+
+.manual-code-copy {
+  justify-self: start;
+  min-height: 36px;
+  padding: 7px 10px;
+  font-size: 0.78rem;
+}
+
+.ticket-preview--revoked {
+  border-style: dashed;
+}
+
+/* ───────────────────────────────────────────────
+   QR FULL-SCREEN OVERLAY
+   ─────────────────────────────────────────────── */
+
+.qr-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  overflow-y: auto;
+  background: rgba(4, 12, 10, 0.78);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+
+.qr-overlay-dialog {
+  position: relative;
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  width: min(94vw, 560px);
+  max-height: calc(100vh - 36px);
+  overflow-y: auto;
+  padding: 24px 18px 18px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--surface-solid);
+  color: var(--text);
+  box-shadow: 0 30px 90px rgba(0, 0, 0, 0.45);
+  text-align: center;
+}
+
+.qr-overlay-close {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 1;
+}
+
+.qr-overlay-dialog h2 {
+  margin: 0;
+  font-size: clamp(1.1rem, 4vw, 1.45rem);
+  line-height: 1.2;
+}
+
+.pass-seat-line--overlay {
+  margin-top: 2px;
+}
+
+.qr-frame--overlay {
+  width: min(90vw, 480px);
+  max-width: 100%;
+  padding: 12px;
+}
+
+.qr-overlay-dialog .manual-code {
+  width: min(90vw, 480px);
+  text-align: left;
+}
+
+.qr-overlay-hint {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 800;
 }
 
 /* ───────────────────────────────────────────────
@@ -1371,6 +1585,8 @@ dd {
   }
   .ticket-print-area .tx-copy-row button,
   .ticket-print-area .gate-summary button,
+  .ticket-print-area .manual-code-copy,
+  .ticket-print-area .qr-open-hint,
   .ticket-print-area .ticket-actions {
     display: none;
   }
@@ -3312,4 +3528,514 @@ dd {
 
 .ghost-button:hover:not(:disabled) {
   border-color: var(--accent-color, #6366f1);
+
+/* ═══════════════════════════════════════════════
+   BOOKING — SELECTION, CHECKOUT, WAITLIST, TICKETS
+   ═══════════════════════════════════════════════ */
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.seat-page-notice {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--brand) 40%, transparent);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--brand) 8%, var(--surface-solid));
+  color: var(--text);
+  font-weight: 800;
+}
+
+.banner-error p {
+  margin: 0 0 8px;
+}
+
+.selection-summary {
+  position: sticky;
+  bottom: 12px;
+  z-index: 20;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--surface-solid) 96%, transparent);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+
+.selection-summary-count {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.92rem;
+  font-weight: 850;
+}
+
+.selection-summary-count strong {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.selection-summary-tiers {
+  display: flex;
+  flex: 1 1 220px;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+.selection-summary-tiers strong {
+  color: var(--text);
+  font-weight: 900;
+}
+
+.selection-summary-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.checkout {
+  display: grid;
+  gap: 16px;
+}
+
+.checkout-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px 18px;
+}
+
+.checkout-head h2 {
+  margin: 0 0 4px;
+}
+
+.checkout-head .muted-text {
+  margin: 0;
+}
+
+.checkout-timer {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 1px solid color-mix(in srgb, var(--success) 40%, transparent);
+  border-radius: 999px;
+  background: var(--success-soft);
+  color: var(--success);
+  font-size: 0.82rem;
+  font-weight: 850;
+}
+
+.checkout-timer strong {
+  font-size: 1.05rem;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}
+
+.checkout-timer.is-warning {
+  border-color: color-mix(in srgb, var(--danger) 45%, transparent);
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.checkout-seats {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface-soft);
+}
+
+.checkout-seats .eyebrow {
+  margin: 0;
+}
+
+.checkout-seats ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.checkout-seats li {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-solid);
+  font-size: 0.84rem;
+}
+
+.checkout-seats li span {
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.checkout-seats .muted-text {
+  margin: 0;
+  font-size: 0.8rem;
+}
+
+.checkout-actions {
+  display: flex;
+  grid-column: 1 / -1;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.checkout-actions .ghost-button,
+.checkout-actions .primary-button {
+  min-height: 44px;
+}
+
+.booking-bar--checkout {
+  display: none;
+}
+
+.waitlist-banner {
+  /* --warning-strong is the dark amber used on the light theme's pale banner.
+     In the dark theme it would sit on a dark amber surface, so the banner picks
+     its own readable ink from the light-theme warning colour instead. */
+  --waitlist-ink: var(--warning-strong);
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid color-mix(in srgb, var(--warning) 45%, transparent);
+  border-radius: var(--radius);
+  background: var(--warning-soft);
+}
+
+:root[data-theme="dark"] .waitlist-banner {
+  --waitlist-ink: var(--warning);
+}
+
+.waitlist-banner-head {
+  display: flex;
+  align-items: start;
+  gap: 12px;
+}
+
+.waitlist-banner-head svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: var(--waitlist-ink);
+}
+
+.waitlist-banner-head h3 {
+  margin: 0 0 6px;
+  color: var(--waitlist-ink);
+  font-size: 1.05rem;
+}
+
+.waitlist-banner-head p {
+  margin: 0;
+  color: var(--waitlist-ink);
+  font-size: 0.88rem;
+  font-weight: 650;
+}
+
+.waitlist-form {
+  margin: 0;
+}
+
+.waitlist-joined {
+  display: grid;
+  gap: 6px;
+}
+
+.waitlist-joined .success-text {
+  margin: 0;
+}
+
+.waitlist-joined .muted-text {
+  margin: 0;
+}
+
+.booking-success {
+  display: grid;
+  gap: 16px;
+}
+
+.booking-success-head h2 {
+  margin: 0 0 6px;
+}
+
+.booking-success-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+/* One pass per row on a phone keeps every QR at its full size. Two columns
+   only once the workspace is wide enough for two 320px codes. */
+.booking-success-passes {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 14px;
+}
+
+.ticket-preview--compact {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+  padding: 14px;
+  box-shadow: none;
+}
+
+.ticket-preview--compact h3 {
+  margin: 0 0 4px;
+  font-size: 1.02rem;
+}
+
+.ticket-preview--compact .ticket-compact-copy p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.ticket-compact-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.ticket-preview--compact .ticket-meta {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 10px;
+}
+
+.ticket-preview--compact .ticket-actions {
+  grid-column: auto;
+  display: flex;
+  justify-content: stretch;
+}
+
+.ticket-preview--compact .ticket-actions .ghost-button {
+  width: 100%;
+}
+
+.my-ticket-groups {
+  display: grid;
+  gap: 20px;
+}
+
+.my-ticket-group {
+  display: grid;
+  gap: 10px;
+}
+
+.my-ticket-group-head {
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+.my-ticket-group-head h3 {
+  margin: 0 0 4px;
+  font-size: 1.02rem;
+}
+
+.my-ticket-group-head .my-ticket-facts {
+  margin: 0;
+}
+
+.my-ticket--pass {
+  display: block;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.my-ticket--pass .ticket-preview {
+  width: 100%;
+}
+
+.my-ticket--revoked {
+  border-style: dashed;
+  background: color-mix(in srgb, var(--surface-soft) 55%, var(--line));
+  color: var(--muted);
+}
+
+.my-ticket--revoked .my-ticket-title {
+  color: var(--muted);
+}
+
+.my-tickets-empty {
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  padding: 18px 12px;
+  text-align: center;
+  color: var(--muted);
+}
+
+.my-tickets-empty svg {
+  color: var(--brand);
+}
+
+.my-tickets-empty p {
+  margin: 0;
+}
+
+.user-tickets-single {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+@media (max-width: 640px) {
+  .seat-page {
+    padding-bottom: calc(92px + env(safe-area-inset-bottom));
+  }
+
+  /* The selection bar is the mobile primary action: it stays on screen while
+     the map scrolls, and the page padding above keeps it off the last row. */
+  .selection-summary {
+    position: fixed;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 60;
+    margin: 0;
+    padding: 10px 14px calc(10px + env(safe-area-inset-bottom));
+    border-right: 0;
+    border-bottom: 0;
+    border-left: 0;
+    border-radius: 0;
+    background: color-mix(in srgb, var(--surface-solid) 96%, transparent);
+    box-shadow: 0 -10px 30px color-mix(in srgb, var(--text) 14%, transparent);
+  }
+
+  .selection-summary-tiers {
+    display: none;
+  }
+
+  .selection-summary-count {
+    margin-right: auto;
+    font-size: 0.92rem;
+  }
+
+  .selection-summary-actions {
+    flex: 1 1 auto;
+    justify-content: flex-end;
+    margin-left: 0;
+  }
+
+  .selection-summary-actions .primary-button {
+    flex: 1 1 auto;
+    min-height: 44px;
+  }
+
+  .selection-summary-actions .ghost-button {
+    min-height: 44px;
+  }
+
+  .booking-bar--checkout {
+    position: fixed;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 60;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 14px calc(10px + env(safe-area-inset-bottom));
+    border-top: 1px solid var(--line);
+    background: color-mix(in srgb, var(--surface-solid) 96%, transparent);
+    box-shadow: 0 -10px 30px color-mix(in srgb, var(--text) 14%, transparent);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+  }
+
+  .booking-bar-countdown {
+    display: grid;
+    gap: 2px;
+    color: var(--muted);
+    font-size: 0.76rem;
+    font-weight: 800;
+  }
+
+  .booking-bar-countdown strong {
+    color: var(--text);
+    font-size: 1.05rem;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .booking-bar--checkout .primary-button {
+    min-height: 44px;
+    min-width: 132px;
+  }
+
+  .checkout-form .checkout-confirm {
+    display: none;
+  }
+
+  .checkout-actions {
+    display: grid;
+  }
+
+  .checkout-actions .ghost-button {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .ticket-preview--compact {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ticket-preview--compact .ticket-actions {
+    justify-content: stretch;
+  }
+
+  .ticket-preview--compact .ticket-actions .ghost-button {
+    width: 100%;
+  }
+
+  .booking-success-passes {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Two large passes side by side once there is room for two 320px codes. */
+@media (min-width: 900px) {
+  .booking-success-passes {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .my-ticket-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  /* Legacy and revoked cards stay full width; only seat passes pair up. */
+  .my-ticket {
+    grid-column: 1 / -1;
+  }
+
+  .my-ticket--pass {
+    grid-column: auto;
+  }
 }

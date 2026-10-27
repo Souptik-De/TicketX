@@ -3,7 +3,7 @@ import { Camera, ScanLine } from "lucide-react";
 import { Html5Qrcode } from "html5-qrcode";
 
 import { scanTicket } from "../lib/api";
-import { extractTxPayload, normalizeTxPayload } from "../lib/ticketQr";
+import { extractTxPayload, isTxPayload, normalizeScanCode } from "../lib/ticketQr";
 
 function describeCameraError(err) {
   const name = err?.name ?? "";
@@ -49,15 +49,22 @@ export function ScannerPanel({ events = [], selectedEventId = "", onEventChange 
 
   const validateTx = useCallback(
     async (rawTx) => {
-      const tx = normalizeTxPayload(rawTx);
+      // Accept the code exactly as the pass shows it: trim the ends and drop
+      // the line breaks/spaces a copy or a hand-typed group can introduce.
+      const tx = extractTxPayload(normalizeScanCode(rawTx));
       if (!tx) {
         setError("Paste or scan a QR payload before validating.");
+        return;
+      }
+      if (!isTxPayload(tx)) {
+        setError("This code looks incomplete. Check it and try again.");
         return;
       }
       if (!gateId || !selectedVolunteer) {
         setError("Select a gate with an assigned volunteer before scanning.");
         return;
       }
+      setQrValue(tx);
       setError("");
       setIsValidating(true);
       try {
@@ -115,7 +122,7 @@ export function ScannerPanel({ events = [], selectedEventId = "", onEventChange 
       const onSuccess = (decodedText) => {
         if (decodedOnceRef.current) return;
         decodedOnceRef.current = true;
-        const tx = extractTxPayload(decodedText);
+        const tx = extractTxPayload(normalizeScanCode(decodedText));
         setQrValue(tx);
         setInfo(`Scanned ${tx.slice(0, 18)}… validating…`);
         setCameraEnabled(false);
@@ -237,14 +244,17 @@ export function ScannerPanel({ events = [], selectedEventId = "", onEventChange 
           <p className="error-text">No volunteer assigned to these gates yet. Ask an admin to add one before scanning.</p>
         )}
         <label className="full-width">
-          QR payload
+          QR payload or manual code
           <textarea
             value={qrValue}
             onChange={(event) => setQrValue(event.target.value)}
-            placeholder="Scan or paste TX-..."
+            placeholder="Scan the QR, or paste/type the manual code (TX-...)"
             rows={3}
           />
         </label>
+        <p className="muted-text scan-hint full-width">
+          QR not scanning? Paste or type the manual code from the attendee&apos;s pass.
+        </p>
         {info && <p className="muted-text">{info}</p>}
         {error && <p className="error-text">{error}</p>}
         <button
