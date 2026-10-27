@@ -688,6 +688,17 @@ svg {
   grid-column: 1 / -1;
   display: flex;
   justify-content: center;
+  /* Google renders the button in a cross-origin iframe. With color-scheme:
+     dark on :root, the browser gives that iframe an opaque white canvas, which
+     shows as a white frame behind the dark button. Matching the widget's own
+     scheme keeps the iframe canvas transparent. */
+  color-scheme: light;
+}
+
+.google-wrap iframe {
+  color-scheme: normal !important;
+  border: none;
+  background: transparent;
 }
 
 /* ───────────────────────────────────────────────
