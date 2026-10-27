@@ -550,7 +550,7 @@ function App() {
   }
 
   if (!sessionUser) {
-    return <LoginPanel initialRole={requestedRole} onBack={() => setView("home")} onLogin={handleLogin} />;
+    return <LoginPanel initialRole={requestedRole} theme={theme} onBack={() => setView("home")} onLogin={handleLogin} />;
   }
 
   // The admin, scanner, and legacy user workspaces all need *an* event to be

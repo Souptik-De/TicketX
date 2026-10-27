@@ -29,7 +29,7 @@ const roleAccounts = [
   },
 ];
 
-export function LoginPanel({ initialRole = "user", onBack, onLogin }) {
+export function LoginPanel({ initialRole = "user", theme = "light", onBack, onLogin }) {
   const [selectedRole, setSelectedRole] = useState(initialRole);
   const [isRegistering, setIsRegistering] = useState(false);
   const [username, setUsername] = useState("");
@@ -256,12 +256,14 @@ export function LoginPanel({ initialRole = "user", onBack, onLogin }) {
               <div className="google-wrap">
                 <GoogleOAuthProvider clientId={googleClientId}>
                   <GoogleLogin
+                    key={theme}
+                    theme={theme === "dark" ? "filled_black" : "outline"}
                     onSuccess={handleGoogleSuccess}
                     onError={handleGoogleError}
                     text="continue_with"
                     shape="rectangular"
                     size="large"
-                    width="100%"
+                    width={320}
                   />
                 </GoogleOAuthProvider>
               </div>
