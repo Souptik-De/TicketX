@@ -75,14 +75,33 @@ def create_database() -> None:
             if folder:
                 os.makedirs(folder, exist_ok=True)
     Base.metadata.create_all(bind=engine)
+    if DATABASE_URL.startswith("postgresql"):
+        _apply_postgres_migrations()
     migrate_existing_database()
+
+
+def _apply_postgres_migrations() -> None:
+    """Add columns that create_all() cannot add to an existing Postgres table.
+
+    create_all() only creates missing tables; it never alters one that already
+    exists. These statements are idempotent so every boot can run them, and the
+    defaults backfill rows written before the columns existed.
+    """
+    statements = (
+        "ALTER TABLE events ADD COLUMN IF NOT EXISTS artist VARCHAR(160)",
+        "ALTER TABLE events ADD COLUMN IF NOT EXISTS city VARCHAR(80)",
+        "ALTER TABLE events ADD COLUMN IF NOT EXISTS category VARCHAR(80)",
+        "ALTER TABLE events ADD COLUMN IF NOT EXISTS is_cancelled BOOLEAN NOT NULL DEFAULT false",
+    )
+    with engine.begin() as connection:
+        for statement in statements:
+            connection.execute(text(statement))
 
 
 def migrate_existing_database() -> None:
     if not DATABASE_URL.startswith("sqlite"):
-        # The ALTERs below repair old SQLite databases. Postgres is provisioned
-        # fresh and gets its complete schema from create_all(), so there is
-        # nothing to backfill here.
+        # The ALTERs below repair old SQLite databases. Postgres columns are
+        # added by _apply_postgres_migrations() in create_database().
         logger.info(
             "Skipping legacy SQLite migrations for %s; schema is managed by create_all().",
             DATABASE_URL.split("://", 1)[0],
@@ -124,6 +143,16 @@ def migrate_existing_database() -> None:
             event_columns = {column["name"] for column in inspector.get_columns("events")}
             if "description" not in event_columns:
                 connection.execute(text("ALTER TABLE events ADD COLUMN description VARCHAR(600) NOT NULL DEFAULT ''"))
+            if "artist" not in event_columns:
+                connection.execute(text("ALTER TABLE events ADD COLUMN artist VARCHAR(160)"))
+            if "city" not in event_columns:
+                connection.execute(text("ALTER TABLE events ADD COLUMN city VARCHAR(80)"))
+            if "category" not in event_columns:
+                connection.execute(text("ALTER TABLE events ADD COLUMN category VARCHAR(80)"))
+            if "is_cancelled" not in event_columns:
+                connection.execute(
+                    text("ALTER TABLE events ADD COLUMN is_cancelled BOOLEAN NOT NULL DEFAULT 0")
+                )
             if "has_seat_map" not in event_columns:
                 # Every existing event predates seat maps, so the default is the
                 # correct backfill: they stay capacity events.

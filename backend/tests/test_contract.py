@@ -3025,3 +3025,353 @@ def test_stats_and_csv_cover_legacy_and_seat_map_events() -> None:
     assert "B1" in seat_csv.text
     assert "General" in seat_csv.text
 
+
+def _future_datetime(days: int = 7, *, hour: int = 18) -> str:
+    value = datetime.now(UTC).replace(tzinfo=None) + timedelta(days=days)
+    return value.replace(hour=hour, minute=0, second=0, microsecond=0).isoformat()
+
+
+def _event_payload(
+    title: str,
+    days_from_now: int = 7,
+    *,
+    artist: str | None = None,
+    city: str | None = None,
+    category: str | None = None,
+    venue: str = "Open Grounds",
+    capacity: int = 100,
+    description: str = "",
+) -> dict:
+    return {
+        "title": title,
+        "description": description,
+        "date_time": _future_datetime(days_from_now),
+        "venue": venue,
+        "capacity": capacity,
+        "artist": artist,
+        "city": city,
+        "category": category,
+    }
+
+
+def _create_event(
+    client: TestClient, headers: dict[str, str], title: str, days_from_now: int = 7, **kwargs
+) -> dict:
+    response = client.post(
+        "/events", json=_event_payload(title, days_from_now, **kwargs), headers=headers
+    )
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+def _search(client: TestClient, **params) -> dict:
+    query = {key: value for key, value in params.items() if value is not None}
+    response = client.get("/events/search", params=query)
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def test_search_normalises_metadata_and_matches_case_insensitively() -> None:
+    reset_database()
+    client = TestClient(app)
+    admin_headers = auth_headers(client, "admin", "admin123")
+
+    event = _create_event(
+        client,
+        admin_headers,
+        "  Midnight  Sessions  ",
+        days_from_now=4,
+        artist="  Coldplay  ",
+        city="  New   Delhi  ",
+        category="  Live   Music  ",
+        venue="  Marine   Drive  ",
+        capacity=120,
+    )
+    assert event["title"] == "Midnight  Sessions"
+    assert event["artist"] == "Coldplay"
+    assert event["city"] == "New Delhi"
+    assert event["category"] == "Live Music"
+    assert event["venue"] == "Marine   Drive"
+
+    for query in ("coldplay", "  coldplay  ", "COLDPLAY", "cold"):
+        body = _search(client, q=query)
+        assert [item["id"] for item in body["items"]] == [event["id"]]
+
+
+def test_search_ranks_exact_prefix_and_typo_matches() -> None:
+    reset_database()
+    client = TestClient(app)
+    admin_headers = auth_headers(client, "admin", "admin123")
+
+    partial = _create_event(
+        client, admin_headers, "Coldplay Tribute", days_from_now=2, artist="The Pretenders"
+    )
+    exact = _create_event(client, admin_headers, "Coldplay", days_from_now=9, artist="Coldplay")
+    typo = _create_event(
+        client, admin_headers, "Coldplai Revival", days_from_now=5, artist="Coldplai"
+    )
+
+    body = _search(client, q="coldplay")
+    assert body["total"] == 3
+    assert [item["id"] for item in body["items"]] == [exact["id"], partial["id"], typo["id"]]
+
+
+def test_search_covers_artist_city_category_and_venue_fields() -> None:
+    reset_database()
+    client = TestClient(app)
+    admin_headers = auth_headers(client, "admin", "admin123")
+
+    concert = _create_event(
+        client,
+        admin_headers,
+        "Stadium Night",
+        days_from_now=6,
+        artist="The Weeknd",
+        city="Bengaluru",
+        category="Music",
+        venue="Marine Drive",
+        capacity=300,
+    )
+    _create_event(
+        client,
+        admin_headers,
+        "Hands On Lab",
+        days_from_now=10,
+        artist="Circuitry Club",
+        city="Kolkata",
+        category="Workshop",
+        venue="Innovation Hub",
+        capacity=40,
+    )
+
+    for query in ("weeknd", "marine drive", "bengaluru", "music"):
+        body = _search(client, q=query)
+        assert [item["id"] for item in body["items"]] == [concert["id"]]
+
+    assert [item["id"] for item in _search(client, city="bengaluru")["items"]] == [concert["id"]]
+
+    filtered = _search(client, q="  night  ", city="BENGALURU", category="MUSIC")
+    assert [item["id"] for item in filtered["items"]] == [concert["id"]]
+
+    assert _search(client, city="bengaluru", category="workshop")["total"] == 0
+
+
+def test_search_paginates_without_duplicates() -> None:
+    reset_database()
+    client = TestClient(app)
+    admin_headers = auth_headers(client, "admin", "admin123")
+
+    created = [
+        _create_event(client, admin_headers, f"Paged Event {index}", days_from_now=index)["id"]
+        for index in range(1, 6)
+    ]
+
+    first = _search(client, q="paged", page=1, page_size=3)
+    assert first["total"] == 5
+    assert [item["id"] for item in first["items"]] == created[:3]
+
+    second = _search(client, q="paged", page=2, page_size=3)
+    assert second["total"] == 5
+    assert [item["id"] for item in second["items"]] == created[3:]
+    assert {item["id"] for item in first["items"]}.isdisjoint({item["id"] for item in second["items"]})
+
+    catalogue = client.get("/events")
+    assert catalogue.status_code == 200
+    assert {item["id"] for item in catalogue.json()} == {1, *created}
+
+    assert client.get("/events/search", params={"page_size": 51}).status_code == 422
+    assert client.get("/events/search", params={"page": 0}).status_code == 422
+
+
+def test_search_hides_past_and_cancelled_events() -> None:
+    reset_database()
+    client = TestClient(app)
+    admin_headers = auth_headers(client, "admin", "admin123")
+
+    past = _create_event(
+        client, admin_headers, "Archived Gathering", days_from_now=-2, artist="Yesterday Band"
+    )
+    future = _create_event(
+        client, admin_headers, "Upcoming Gathering", days_from_now=3, artist="Tomorrow Band"
+    )
+
+    body = _search(client, q="gathering")
+    assert [item["id"] for item in body["items"]] == [future["id"]]
+    catalogue = client.get("/events")
+    assert catalogue.status_code == 200
+    assert past["id"] in {item["id"] for item in catalogue.json()}
+
+    cancelled = client.patch(
+        f"/events/{future['id']}", json={"is_cancelled": True}, headers=admin_headers
+    )
+    assert cancelled.status_code == 200, cancelled.text
+    assert cancelled.json()["is_cancelled"] is True
+    assert _search(client, q="gathering")["total"] == 0
+
+    restored = client.patch(
+        f"/events/{future['id']}", json={"is_cancelled": False}, headers=admin_headers
+    )
+    assert restored.status_code == 200, restored.text
+    assert [item["id"] for item in _search(client, q="gathering")["items"]] == [future["id"]]
+
+
+def test_search_handles_odd_query_inputs_and_filters() -> None:
+    reset_database()
+    client = TestClient(app)
+    admin_headers = auth_headers(client, "admin", "admin123")
+
+    first = _create_event(client, admin_headers, "Filter One", days_from_now=2, artist="Alpha")
+    second = _create_event(client, admin_headers, "Filter Two", days_from_now=4, artist="Beta")
+
+    assert _search(client, q="")["total"] == 3
+
+    for query in ("'; DROP TABLE events; --", "<script>alert(1)</script>", "coldplay*"):
+        assert _search(client, q=query)["total"] == 0
+
+    assert [item["id"] for item in _search(client, date=first["date_time"][:10])["items"]] == [
+        first["id"]
+    ]
+    assert [item["id"] for item in _search(client, date=second["date_time"][:10])["items"]] == [
+        second["id"]
+    ]
+
+    last_page = _search(client, page=99)
+    assert last_page["items"] == []
+    assert last_page["total"] == 3
+
+
+def test_admin_can_update_event_metadata_and_clear_optional_fields() -> None:
+    reset_database()
+    client = TestClient(app)
+    admin_headers = auth_headers(client, "admin", "admin123")
+    attendee_headers = auth_headers(client, "attendee", "attendee123")
+
+    event = _create_event(
+        client,
+        admin_headers,
+        "Original Title",
+        days_from_now=5,
+        artist="Original Artist",
+        city="Pune",
+        category="Theatre",
+    )
+
+    updated = client.patch(
+        f"/events/{event['id']}",
+        json={"title": "  Revised Title  ", "artist": "  New Artist  "},
+        headers=admin_headers,
+    )
+    assert updated.status_code == 200, updated.text
+    body = updated.json()
+    assert body["title"] == "Revised Title"
+    assert body["artist"] == "New Artist"
+    assert body["city"] == "Pune"
+    assert [item["id"] for item in _search(client, q="revised")["items"]] == [event["id"]]
+    assert [item["id"] for item in _search(client, q="new artist")["items"]] == [event["id"]]
+
+    cleared = client.patch(
+        f"/events/{event['id']}",
+        json={"artist": None, "city": "   ", "category": None},
+        headers=admin_headers,
+    )
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["artist"] is None
+    assert cleared.json()["city"] is None
+    assert cleared.json()["category"] is None
+
+    assert (
+        client.patch("/events/999999", json={"title": "Ghost"}, headers=admin_headers).status_code
+        == 404
+    )
+    assert (
+        client.patch(f"/events/{event['id']}", json={"title": None}, headers=admin_headers).status_code
+        == 422
+    )
+    assert (
+        client.patch(
+            f"/events/{event['id']}", json={"title": "Nope"}, headers=attendee_headers
+        ).status_code
+        == 403
+    )
+
+    unchanged = client.patch(f"/events/{event['id']}", json={}, headers=admin_headers)
+    assert unchanged.status_code == 200, unchanged.text
+    assert unchanged.json()["title"] == "Revised Title"
+
+
+def test_seat_map_events_reject_capacity_updates() -> None:
+    reset_database()
+    client = TestClient(app)
+    admin_headers = auth_headers(client, "admin", "admin123")
+
+    event = _create_seat_map_event(
+        client,
+        admin_headers,
+        [{"name": "General", "rows": [{"label": "A", "blocks": [2]}]}],
+        title="Layout Capacity",
+    )
+    assert event["capacity"] == 2
+
+    rejected = client.patch(
+        f"/events/{event['id']}", json={"capacity": 10}, headers=admin_headers
+    )
+    assert rejected.status_code == 409, rejected.text
+    assert (
+        rejected.json()["detail"] == "capacity is derived from the seat layout for this event"
+    )
+
+    allowed = client.patch(f"/events/{event['id']}", json={"capacity": 2}, headers=admin_headers)
+    assert allowed.status_code == 200, allowed.text
+    assert allowed.json()["capacity"] == 2
+
+
+def test_migrate_existing_database_adds_search_columns_idempotently(tmp_path) -> None:
+    legacy_path = tmp_path / "legacy-search.db"
+    legacy_engine = create_engine(f"sqlite:///{legacy_path.as_posix()}")
+    with legacy_engine.begin() as setup:
+        setup.execute(
+            text(
+                "CREATE TABLE events ("
+                "event_id INTEGER PRIMARY KEY, "
+                "title VARCHAR(160) NOT NULL, "
+                "description TEXT NOT NULL, "
+                "date_time DATETIME NOT NULL, "
+                "venue VARCHAR(160) NOT NULL, "
+                "capacity INTEGER NOT NULL)"
+            )
+        )
+        setup.execute(
+            text(
+                "INSERT INTO events (event_id, title, description, date_time, venue, capacity) "
+                "VALUES (1, 'Legacy Search Fest', '', '2026-10-01T10:00:00', 'Hall A', 500)"
+            )
+        )
+
+    original_database_url = database_module.DATABASE_URL
+    original_engine = database_module.engine
+    database_module.DATABASE_URL = f"sqlite:///{legacy_path.as_posix()}"
+    database_module.engine = legacy_engine
+    try:
+        database_module.migrate_existing_database()
+        database_module.migrate_existing_database()
+        columns = {column["name"] for column in inspect(legacy_engine).get_columns("events")}
+        with legacy_engine.begin() as connection:
+            row = connection.execute(
+                text(
+                    "SELECT title, artist, city, category, is_cancelled "
+                    "FROM events WHERE event_id = 1"
+                )
+            ).mappings().one()
+    finally:
+        database_module.DATABASE_URL = original_database_url
+        database_module.engine = original_engine
+        legacy_engine.dispose()
+        legacy_path.unlink(missing_ok=True)
+
+    assert {"artist", "city", "category", "is_cancelled"} <= columns
+    assert row["title"] == "Legacy Search Fest"
+    assert row["artist"] is None
+    assert row["city"] is None
+    assert row["category"] is None
+    assert row["is_cancelled"] == 0
+

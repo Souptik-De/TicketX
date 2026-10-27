@@ -1,12 +1,23 @@
-import { useState } from "react";
-import { Armchair, CalendarPlus, DoorOpen, MapPin, Plus, UsersRound, Trash2 } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Armchair, Ban, CalendarPlus, DoorOpen, MapPin, Pencil, Plus, RotateCcw, UsersRound, Trash2 } from "lucide-react";
 
-import { createEvent, createGate, deleteEvent, revokeTicket } from "../lib/api";
+import { createEvent, createGate, deleteEvent, revokeTicket, updateEvent } from "../lib/api";
 import { emptyLayout, serializeLayout, validateLayout } from "../lib/layoutToSeats";
 import { EventStats } from "./EventStats";
 import { SeatLayoutBuilder } from "./SeatLayoutBuilder";
 
-export function AdminPanel({ events, gates, selectedEventId, onEventChange, onEventCreated, onGateCreated, onEventDeleted }) {
+const CATEGORIES = [
+  "concert",
+  "festival",
+  "workshop",
+  "sports",
+  "cultural",
+  "comedy",
+  "literary",
+  "tech",
+];
+
+export function AdminPanel({ events, gates, selectedEventId, onEventChange, onEventCreated, onEventUpdated, onGateCreated, onEventDeleted }) {
   const [title, setTitle] = useState("Freshers Night 2026");
   const [description, setDescription] = useState(
     "An evening of live performances, student showcases, food stalls, and campus celebrations.",
@@ -21,6 +32,9 @@ export function AdminPanel({ events, gates, selectedEventId, onEventChange, onEv
   const [gateName, setGateName] = useState("VIP Gate");
   const [gateLocation, setGateLocation] = useState("Auditorium east entrance");
   const [volunteerName, setVolunteerName] = useState("Gate Volunteer");
+  const [artist, setArtist] = useState("");
+  const [city, setCity] = useState("");
+  const [category, setCategory] = useState("");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [eventMessage, setEventMessage] = useState("");
@@ -28,6 +42,32 @@ export function AdminPanel({ events, gates, selectedEventId, onEventChange, onEv
   const [isSavingEvent, setIsSavingEvent] = useState(false);
   const [isSavingGate, setIsSavingGate] = useState(false);
   const [isDeletingEvent, setIsDeletingEvent] = useState(false);
+  // Edit-metadata form, prefilled from the selected event. The fields are
+  // optional on the wire: an empty artist is sent as null to clear it.
+  const [editTitle, setEditTitle] = useState("");
+  const [editArtist, setEditArtist] = useState("");
+  const [editCity, setEditCity] = useState("");
+  const [editCategory, setEditCategory] = useState("");
+  const [isSavingUpdate, setIsSavingUpdate] = useState(false);
+  const [isTogglingCancel, setIsTogglingCancel] = useState(false);
+  const [updateMessage, setUpdateMessage] = useState("");
+  const [updateError, setUpdateError] = useState("");
+
+  useEffect(() => {
+    setUpdateMessage("");
+    setUpdateError("");
+    if (!selectedEvent) {
+      setEditTitle("");
+      setEditArtist("");
+      setEditCity("");
+      setEditCategory("");
+      return;
+    }
+    setEditTitle(selectedEvent.title);
+    setEditArtist(selectedEvent.artist ?? "");
+    setEditCity(selectedEvent.city ?? "");
+    setEditCategory(selectedEvent.category ?? "");
+  }, [selectedEvent?.id]);
 
   const layoutValidation = validateLayout(seatLayout);
   const seatMapInvalid = eventMode === "map" && !layoutValidation.valid;
@@ -57,6 +97,9 @@ export function AdminPanel({ events, gates, selectedEventId, onEventChange, onEv
         venue,
         date_time: new Date(dateTime).toISOString(),
       };
+      if (artist.trim()) payload.artist = artist.trim();
+      if (city.trim()) payload.city = city.trim();
+      if (category) payload.category = category;
       if (eventMode === "map") {
         // The server derives capacity from the sellable seats, so sending one
         // would just be a second, conflicting source of truth.
@@ -127,6 +170,58 @@ export function AdminPanel({ events, gates, selectedEventId, onEventChange, onEv
     }
   }
 
+  async function handleEventUpdate(submitEvent) {
+    submitEvent.preventDefault();
+    if (!selectedEvent) {
+      setUpdateError("Select an event to edit first.");
+      return;
+    }
+
+    setUpdateError("");
+    setUpdateMessage("");
+    setIsSavingUpdate(true);
+
+    try {
+      const updated = await updateEvent(selectedEvent.id, {
+        title: editTitle.trim(),
+        artist: editArtist.trim() || null,
+        city: editCity.trim() || null,
+        category: editCategory || null,
+      });
+      onEventUpdated(updated);
+      setUpdateMessage(`Details for ${updated.title} saved.`);
+    } catch (err) {
+      setUpdateError(err instanceof Error ? err.message : "Could not update event");
+    } finally {
+      setIsSavingUpdate(false);
+    }
+  }
+
+  async function handleToggleCancel() {
+    if (!selectedEvent) {
+      setUpdateError("Select an event to edit first.");
+      return;
+    }
+
+    setUpdateError("");
+    setUpdateMessage("");
+    setIsTogglingCancel(true);
+
+    try {
+      const updated = await updateEvent(selectedEvent.id, { is_cancelled: !selectedEvent.is_cancelled });
+      onEventUpdated(updated);
+      setUpdateMessage(
+        updated.is_cancelled
+          ? `${updated.title} is cancelled. It is hidden from search and the catalog.`
+          : `${updated.title} is live again.`,
+      );
+    } catch (err) {
+      setUpdateError(err instanceof Error ? err.message : "Could not change the event status");
+    } finally {
+      setIsTogglingCancel(false);
+    }
+  }
+
   return (
     <section className="admin-grid">
       <div className="left-stack">
@@ -152,6 +247,25 @@ export function AdminPanel({ events, gates, selectedEventId, onEventChange, onEv
             <label>
               Venue
               <input value={venue} onChange={(event) => setVenue(event.target.value)} required />
+            </label>
+            <label>
+              Artist
+              <input value={artist} onChange={(event) => setArtist(event.target.value)} maxLength={160} placeholder="Optional" />
+            </label>
+            <label>
+              City
+              <input value={city} onChange={(event) => setCity(event.target.value)} maxLength={80} placeholder="Optional" />
+            </label>
+            <label>
+              Category
+              <select value={category} onChange={(event) => setCategory(event.target.value)}>
+                <option value="">Optional</option>
+                {CATEGORIES.map((name) => (
+                  <option key={name} value={name}>
+                    {name}
+                  </option>
+                ))}
+              </select>
             </label>
             {eventMode === "simple" && (
               <label>
@@ -192,6 +306,78 @@ export function AdminPanel({ events, gates, selectedEventId, onEventChange, onEv
               {isSavingEvent ? "Creating..." : "Create event"}
             </button>
           </form>
+        </div>
+
+        <div className="panel admin-form-panel">
+          <div className="section-heading">
+            <p className="eyebrow">Catalog Search Keys</p>
+            <h2>{selectedEvent ? `Edit ${selectedEvent.title}` : "Edit Event"}</h2>
+          </div>
+          {!selectedEvent ? (
+            <p className="muted-text">Create an event first, then its search details can be edited here.</p>
+          ) : (
+            <form className="ticket-form" onSubmit={handleEventUpdate}>
+              <label className="full-width">
+                Title
+                <input value={editTitle} onChange={(event) => setEditTitle(event.target.value)} required minLength={3} maxLength={160} />
+              </label>
+              <label>
+                Artist
+                <input value={editArtist} onChange={(event) => setEditArtist(event.target.value)} maxLength={160} placeholder="Searchable — leave empty to clear" />
+              </label>
+              <label>
+                City
+                <input value={editCity} onChange={(event) => setEditCity(event.target.value)} maxLength={80} placeholder="Searchable — leave empty to clear" />
+              </label>
+              <label>
+                Category
+                <select value={editCategory} onChange={(event) => setEditCategory(event.target.value)}>
+                  <option value="">Uncategorised</option>
+                  {CATEGORIES.map((name) => (
+                    <option key={name} value={name}>
+                      {name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              {updateError && (
+                <p className="error-text" role="alert">
+                  {updateError}
+                </p>
+              )}
+              {updateMessage && <p className="success-text">{updateMessage}</p>}
+              <div className="edit-event-actions full-width">
+                <button className="primary-button" disabled={isSavingUpdate || !editTitle.trim()} type="submit">
+                  <Pencil size={18} aria-hidden="true" />
+                  {isSavingUpdate ? "Saving..." : "Save details"}
+                </button>
+                <button
+                  className="ghost-button"
+                  disabled={isTogglingCancel}
+                  type="button"
+                  onClick={handleToggleCancel}
+                >
+                  {selectedEvent.is_cancelled ? (
+                    <>
+                      <RotateCcw size={18} aria-hidden="true" />
+                      Restore event
+                    </>
+                  ) : (
+                    <>
+                      <Ban size={18} aria-hidden="true" />
+                      Cancel event
+                    </>
+                  )}
+                </button>
+              </div>
+              {selectedEvent.is_cancelled && (
+                <p className="muted-text full-width">
+                  This event is cancelled: it is hidden from public search and the catalog.
+                </p>
+              )}
+            </form>
+          )}
         </div>
 
         <div className="panel admin-form-panel">
@@ -264,7 +450,10 @@ export function AdminPanel({ events, gates, selectedEventId, onEventChange, onEv
                 onClick={() => onEventChange(event.id)}
               >
                 <span className="event-row-copy">
-                  <strong>{event.title}</strong>
+                  <strong>
+                    {event.title}
+                    {event.is_cancelled && <em className="meta-chip meta-chip-cancelled">cancelled</em>}
+                  </strong>
                   <small>
                     {event.venue} - {new Date(event.date_time).toLocaleString()}
                   </small>

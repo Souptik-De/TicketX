@@ -1,7 +1,9 @@
 import { Armchair, ArrowRight, LogOut, Moon, ScanLine, ShieldCheck, Sun, Ticket, UserRound } from "lucide-react";
 
+import { CatalogSearch } from "./CatalogSearch";
 import { EventCard } from "./EventCard";
 import { TicketXLogo } from "./TicketXLogo";
+import { useEventSearch } from "../hooks/useEventSearch";
 import { formatDate, remainingSeats } from "../lib/format";
 
 const roles = [
@@ -12,6 +14,8 @@ const roles = [
 
 export function HomePage({ events, isLoading, error, sessionUser, theme, onThemeToggle, onRoleAccess, onLogout, onGetTicket }) {
   const featuredEvent = events[0];
+  const search = useEventSearch();
+  const catalogEvents = search.hasQuery ? search.results : events;
 
   return (
     <main className="home-shell" id="top">
@@ -81,14 +85,31 @@ export function HomePage({ events, isLoading, error, sessionUser, theme, onTheme
           <p>Choose an event to see availability, seating tiers, and reserve a QR ticket.</p>
         </div>
 
+        <CatalogSearch
+          query={search.query}
+          setQuery={search.setQuery}
+          category={search.category}
+          setCategory={search.setCategory}
+          isSearching={search.isSearching}
+        />
+
+        {search.searchError && <div className="banner-error">{search.searchError}</div>}
+        {!isLoading && !error && search.hasQuery && !search.isSearching && search.total > 0 && (
+          <p className="catalog-search-count">
+            {search.total} {search.total === 1 ? "match" : "matches"} for your search.
+          </p>
+        )}
+
         {error && <div className="banner-error">{error}</div>}
         {isLoading && <div className="catalog-empty">Loading upcoming events...</div>}
-        {!isLoading && !error && events.length === 0 && (
-          <div className="catalog-empty">No events are accepting tickets right now.</div>
+        {!isLoading && !error && catalogEvents.length === 0 && (
+          <div className="catalog-empty">
+            {search.hasQuery && !search.isSearching ? "No events match your search." : "No events are accepting tickets right now."}
+          </div>
         )}
 
         <div className="event-card-grid">
-          {events.map((event) => {
+          {catalogEvents.map((event) => {
             const soldOut = remainingSeats(event) === 0;
             return (
               <EventCard

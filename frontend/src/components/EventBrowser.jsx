@@ -1,6 +1,8 @@
 import { Armchair, ArrowLeft, CalendarDays, Ticket, TicketCheck } from "lucide-react";
 
+import { CatalogSearch } from "./CatalogSearch";
 import { EventCard } from "./EventCard";
+import { useEventSearch } from "../hooks/useEventSearch";
 import { eventTiers, formatDate, remainingSeats, TIERS, tierIssuedCount } from "../lib/format";
 
 /**
@@ -15,6 +17,8 @@ import { eventTiers, formatDate, remainingSeats, TIERS, tierIssuedCount } from "
  */
 export function EventBrowser({ events, isLoading, error, myTickets, selectedEventId, onSelect }) {
   const registeredEventIds = new Set((myTickets ?? []).map((ticket) => ticket.event.id));
+  const search = useEventSearch();
+  const catalogEvents = search.hasQuery ? search.results : events;
 
   return (
     <section className="event-catalog" id="events">
@@ -26,14 +30,31 @@ export function EventBrowser({ events, isLoading, error, myTickets, selectedEven
         <p>Choose an event to register. Each one shows its date, venue, and how many seats are left.</p>
       </div>
 
+      <CatalogSearch
+        query={search.query}
+        setQuery={search.setQuery}
+        category={search.category}
+        setCategory={search.setCategory}
+        isSearching={search.isSearching}
+      />
+
+      {search.searchError && <div className="banner-error">{search.searchError}</div>}
+      {!isLoading && !error && search.hasQuery && !search.isSearching && search.total > 0 && (
+        <p className="catalog-search-count">
+          {search.total} {search.total === 1 ? "match" : "matches"} for your search.
+        </p>
+      )}
+
       {error && <div className="banner-error">{error}</div>}
       {isLoading && <div className="catalog-empty">Loading upcoming events...</div>}
-      {!isLoading && !error && events.length === 0 && (
-        <div className="catalog-empty">No events are accepting tickets right now.</div>
+      {!isLoading && !error && catalogEvents.length === 0 && (
+        <div className="catalog-empty">
+          {search.hasQuery && !search.isSearching ? "No events match your search." : "No events are accepting tickets right now."}
+        </div>
       )}
 
       <div className="event-card-grid">
-        {events.map((event) => {
+        {catalogEvents.map((event) => {
           const isSeatMap = Boolean(event.has_seat_map);
           const isRegistered = registeredEventIds.has(event.id);
           const soldOut = remainingSeats(event) === 0;

@@ -50,6 +50,14 @@ export function EventCard({ event, actionLabel, actionIcon: ActionIcon, onSelect
       <div className="event-card-copy">
         <h3>{event.title}</h3>
         <p>{event.description || "More details about this event will be announced soon."}</p>
+        {(event.artist || event.city || event.category) && (
+          <div className="event-card-meta">
+            {event.artist && <em className="meta-chip">{event.artist}</em>}
+            {event.city && <em className="meta-chip">{event.city}</em>}
+            {event.category && <em className="meta-chip meta-chip-category">{event.category}</em>}
+            {event.is_cancelled && <strong className="meta-chip meta-chip-cancelled">Cancelled</strong>}
+          </div>
+        )}
       </div>
 
       <div className="event-facts">

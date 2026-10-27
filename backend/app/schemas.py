@@ -65,13 +65,24 @@ class EventOut(BaseModel):
     description: str
     date_time: datetime
     venue: str
+    artist: str | None = None
+    city: str | None = None
+    category: str | None = None
     capacity: int
     issued_count: int
     revoked_count: int
     tier_counts: list[TierCount]
     has_seat_map: bool = False
+    is_cancelled: bool = False
     # Filled by the event listing for seat-map events; legacy events stay empty.
     tiers: list[EventTierOut] = Field(default_factory=list)
+
+
+class EventSearchResponse(BaseModel):
+    items: list[EventOut]
+    total: int
+    page: int
+    page_size: int
 
 
 class RowIn(BaseModel):
@@ -154,15 +165,30 @@ class SeatLayoutIn(BaseModel):
         return self
 
 
+def _clean_optional_text(value: str | None) -> str | None:
+    if value is None:
+        return None
+    cleaned = " ".join(value.split())
+    return cleaned or None
+
+
 class EventCreate(BaseModel):
     title: str = Field(min_length=3, max_length=160)
     description: str = Field(default="", max_length=600)
     date_time: datetime
     venue: str = Field(min_length=2, max_length=160)
+    artist: str | None = Field(default=None, max_length=160)
+    city: str | None = Field(default=None, max_length=80)
+    category: str | None = Field(default=None, max_length=80)
     # Capacity is required for legacy events. A seat-map event derives it from
     # the sellable seats in the layout, so any value sent alongside is ignored.
     capacity: int | None = None
     seat_layout: SeatLayoutIn | None = None
+
+    @field_validator("artist", "city", "category")
+    @classmethod
+    def _normalise_metadata(cls, value: str | None) -> str | None:
+        return _clean_optional_text(value)
 
     @model_validator(mode="after")
     def _validate_capacity(self) -> "EventCreate":
@@ -171,6 +197,42 @@ class EventCreate(BaseModel):
                 raise ValueError("capacity is required when no seat_layout is provided")
             if not 1 <= self.capacity <= 50000:
                 raise ValueError("capacity must be greater than 0 and at most 50000")
+        return self
+
+
+class EventUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=3, max_length=160)
+    description: str | None = Field(default=None, max_length=600)
+    date_time: datetime | None = None
+    venue: str | None = Field(default=None, min_length=2, max_length=160)
+    artist: str | None = Field(default=None, max_length=160)
+    city: str | None = Field(default=None, max_length=80)
+    category: str | None = Field(default=None, max_length=80)
+    capacity: int | None = Field(default=None, ge=1, le=50000)
+    is_cancelled: bool | None = None
+
+    @field_validator("artist", "city", "category")
+    @classmethod
+    def _normalise_metadata(cls, value: str | None) -> str | None:
+        return _clean_optional_text(value)
+
+    @model_validator(mode="after")
+    def _reject_explicit_nulls(self) -> "EventUpdate":
+        required_fields = (
+            "title",
+            "description",
+            "date_time",
+            "venue",
+            "capacity",
+            "is_cancelled",
+        )
+        nulls = [
+            name
+            for name in required_fields
+            if name in self.model_fields_set and getattr(self, name) is None
+        ]
+        if nulls:
+            raise ValueError(f"{', '.join(nulls)} must not be null")
         return self
 
 

@@ -3188,3 +3188,128 @@ dd {
     animation: none;
   }
 }
+/* Catalog search bar (fuzzy event search) */
+.catalog-search-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.catalog-search-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-radius: 14px;
+  border: 1px solid var(--border-color, rgba(148, 163, 184, 0.35));
+  background: var(--card-bg, rgba(255, 255, 255, 0.06));
+  padding: 10px 14px;
+}
+
+.catalog-search-row:focus-within {
+  border-color: var(--accent-color, #6366f1);
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.25);
+}
+
+.catalog-search-row svg {
+  flex-shrink: 0;
+  opacity: 0.65;
+}
+
+.catalog-search-input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  outline: none;
+}
+
+.catalog-search-input::placeholder {
+  opacity: 0.55;
+}
+
+.catalog-search-tag {
+  flex-shrink: 0;
+  font-size: 0.72rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  opacity: 0.6;
+}
+
+.catalog-search-select {
+  border: 1px solid var(--border-color, rgba(148, 163, 184, 0.35));
+  border-radius: 10px;
+  padding: 6px 10px;
+  font: inherit;
+  font-size: 0.85rem;
+  color: inherit;
+  background: transparent;
+}
+
+.catalog-search-count {
+  font-size: 0.85rem;
+  opacity: 0.7;
+  margin: 0;
+}
+
+/* Event card metadata chips (artist, city, category, cancelled) */
+.event-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0 0;
+}
+
+.meta-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border-radius: 999px;
+  border: 1px solid var(--border-color, rgba(148, 163, 184, 0.35));
+  padding: 2px 10px;
+  font-size: 0.75rem;
+  font-style: normal;
+  font-weight: 500;
+  opacity: 0.85;
+}
+
+.meta-chip-category {
+  text-transform: capitalize;
+}
+
+.meta-chip-cancelled {
+  border-color: rgba(239, 68, 68, 0.6);
+  color: var(--danger-color, #ef4444);
+  font-style: normal;
+  font-weight: 700;
+}
+
+/* Admin: edit-event panel actions */
+.edit-event-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.ghost-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border-radius: 10px;
+  border: 1px solid var(--border-color, rgba(148, 163, 184, 0.4));
+  background: transparent;
+  color: inherit;
+  padding: 10px 16px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.ghost-button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.ghost-button:hover:not(:disabled) {
+  border-color: var(--accent-color, #6366f1);
+}
