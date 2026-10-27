@@ -1,6 +1,9 @@
+import logging
 import os
 
 from fastapi import HTTPException, status
+
+logger = logging.getLogger(__name__)
 
 
 def get_google_client_id() -> str:
@@ -18,7 +21,11 @@ def verify_google_id_token(id_token_str: str) -> dict:
     try:
         from google.auth.transport import requests as google_requests
         from google.oauth2 import id_token as google_id_token
-    except ImportError:
+    except ImportError as exc:
+        # Usually the host installed plain google-auth without the `requests`
+        # extra, which google.auth.transport.requests imports. Log the real
+        # module name so the Render logs say what is missing.
+        logger.warning("Google login dependencies are unavailable: %s", exc)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Google login is not available",

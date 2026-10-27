@@ -6,5 +6,9 @@ pydantic>=2.7.0
 email-validator>=2.2.0
 pytest>=8.2.0
 httpx>=0.27.0
-google-auth>=2.0.0
+# The ID-token verification in google_auth.py uses google.auth.transport.requests,
+# which imports the third-party `requests` package. google-auth only installs that
+# through its [requests] extra, so plain `google-auth` works locally (where
+# requests is already present) but fails on a clean host like Render.
+google-auth[requests]>=2.0.0
 python-dotenv>=1.0.0
