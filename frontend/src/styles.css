@@ -3528,6 +3528,7 @@ dd {
 
 .ghost-button:hover:not(:disabled) {
   border-color: var(--accent-color, #6366f1);
+}
 
 /* ═══════════════════════════════════════════════
    BOOKING — SELECTION, CHECKOUT, WAITLIST, TICKETS
