@@ -3409,9 +3409,9 @@ dd {
    the real dark and light themes supply every value. */
 .catalog-search {
   display: flex;
-  align-items: center;
-  flex-wrap: wrap;
   gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 24px;
 }
 
 .catalog-search-field {
@@ -3539,10 +3539,14 @@ dd {
 .catalog-category-option {
   display: flex;
   align-items: center;
-  padding: 8px 14px;
+  padding: 9px 14px;
   font-size: 0.9rem;
   color: var(--text);
   cursor: pointer;
+}
+
+.catalog-category-option + .catalog-category-option {
+  border-top: 1px solid color-mix(in srgb, var(--line) 40%, transparent);
 }
 
 .catalog-category-option:hover {
@@ -3553,10 +3557,12 @@ dd {
   background: var(--brand);
   color: var(--surface-solid);
   font-weight: 600;
+  border-radius: 0;
 }
 
 .catalog-category-option[data-highlighted="true"] {
   background: color-mix(in srgb, var(--brand) 15%, var(--surface-soft));
+  color: var(--text);
 }
 
 .catalog-search-icon {
