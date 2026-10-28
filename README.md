@@ -104,6 +104,8 @@ This runs the FastAPI contract tests and verifies that the React app builds.
 - Password login plus optional Google login for users and scanners.
 - Public event homepage with descriptions, dates, venues, capacity, and seating availability.
 - Browse events after signing in, then register for the one you picked, with your name and email prefilled from your account.
+- Fuzzy-search the catalog by partial event, artist, venue, city, or category name on a 300 ms debounce.
+- Edit an event's title, artist, city, or category from the admin panel, and cancel it to hide it from browsing until restored.
 - A "Recommended for you" row above the catalog, ranked from your own registrations and what other attendees are booking, with a one-line reason for each.
 - One seat per person per event: registering again for the same event is refused instead of quietly taking another seat.
 - See every ticket you hold after a reload, and reopen its QR pass from the list.
@@ -131,8 +133,10 @@ This runs the FastAPI contract tests and verifies that the React app builds.
 | Auth | `POST /auth/google` | Sign in with a Google ID token (user and scanner roles). |
 | Auth | `GET /auth/me` | Return the current signed-in user. |
 | Public | `GET /events` | Return available events for the public homepage. |
+| Public | `GET /events/search` | Fuzzy-search events by title, artist, venue, city, or category across the whole catalog. |
 | User | `GET /me/event-suggestions` | Rank registrable events for the caller and give a one-line reason for each. |
 | Admin | `POST /events` | Create a new event from the admin panel. |
+| Admin | `PATCH /events/{id}` | Update title, artist, city, or category, or set `is_cancelled` to hide/restore the event; clearing a field sends `null`. |
 | Admin | `DELETE /events/{id}` | Delete an event and everything attached to it. |
 | Admin | `POST /gates` | Add a gate to an event. |
 | ET-01 | `POST /tickets` | Create attendee and issue ticket if event capacity remains, otherwise join the waitlist. 409 if that attendee already holds a ticket for the event. |

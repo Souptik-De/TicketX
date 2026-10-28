@@ -1,5 +1,6 @@
 import csv
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
+import difflib
 import io
 
 from fastapi import HTTPException, status
@@ -14,6 +15,7 @@ from .schemas import (
     ConfirmHoldOut,
     EventCreate,
     EventOut,
+    EventUpdate,
     EventStatsGate,
     EventStatsOut,
     EventStatsTicket,
@@ -152,6 +154,9 @@ def create_event(db: Session, payload: EventCreate) -> EventOut:
         description=payload.description.strip(),
         date_time=payload.date_time,
         venue=payload.venue.strip(),
+        artist=payload.artist,
+        city=payload.city,
+        category=payload.category,
         capacity=payload.capacity or 0,
         has_seat_map=payload.seat_layout is not None,
     )
@@ -296,6 +301,143 @@ def list_events(db: Session) -> list[EventOut]:
     )
     summaries = _tier_summaries_for_events(db, seat_map_ids)
     return [_event_out(db, event, summaries.get(event.id, [])) for event in events]
+
+
+def _normalise_search_text(value: str) -> str:
+    """Lowercase, trim and collapse whitespace for lenient matching."""
+    return " ".join(value.casefold().split())
+
+
+def _match_score(query: str, candidate: str) -> float:
+    """Score one field against the query, from exact down to a typo match."""
+    if not candidate:
+        return 0.0
+    if candidate == query:
+        return 1.0
+    if candidate.startswith(query):
+        return 0.85
+    tokens = candidate.split()
+    if any(token.startswith(query) for token in tokens):
+        return 0.7
+    if query in candidate:
+        return 0.55
+    ratio = difflib.SequenceMatcher(None, query, candidate).ratio()
+    token_ratio = max(
+        (difflib.SequenceMatcher(None, query, token).ratio() for token in tokens),
+        default=0.0,
+    )
+    best = max(ratio, token_ratio)
+    return best * 0.5 if best >= 0.6 else 0.0
+
+
+_EVENT_SEARCH_WEIGHTS: tuple[tuple[str, float], ...] = (
+    ("title", 6.0),
+    ("artist", 4.0),
+    ("venue", 3.0),
+    ("city", 2.0),
+    ("category", 2.0),
+)
+
+
+def _event_search_score(query: str, event: Event) -> float:
+    """Weight the best field match so titles outrank secondary metadata."""
+    best = 0.0
+    for field_name, weight in _EVENT_SEARCH_WEIGHTS:
+        value = getattr(event, field_name)
+        if not value:
+            continue
+        best = max(best, weight * _match_score(query, _normalise_search_text(value)))
+    return best
+
+
+def search_events(
+    db: Session,
+    q: str = "",
+    city: str | None = None,
+    category: str | None = None,
+    event_date: date | None = None,
+    page: int = 1,
+    page_size: int = 6,
+) -> tuple[list[EventOut], int]:
+    """Public search over the whole catalog, tolerant of partial words and typos."""
+    query = (
+        db.query(Event)
+        .options(subqueryload(Event.tickets))
+    )
+
+    city_filter = _normalise_search_text(city) if city else ""
+    if city_filter:
+        query = query.filter(func.lower(Event.city) == city_filter)
+
+    category_filter = _normalise_search_text(category) if category else ""
+    if category_filter:
+        query = query.filter(func.lower(Event.category) == category_filter)
+
+    if event_date is not None:
+        start = datetime.combine(event_date, datetime.min.time())
+        query = query.filter(
+            Event.date_time >= start,
+            Event.date_time < start + timedelta(days=1),
+        )
+
+    events = query.all()
+    query_text = _normalise_search_text(q)
+    if query_text:
+        scored = [
+            (score, event)
+            for event in events
+            if (score := _event_search_score(query_text, event)) > 0
+        ]
+        scored.sort(key=lambda item: (-item[0], item[1].date_time, item[1].id))
+        ranked = [event for _, event in scored]
+    else:
+        ranked = sorted(events, key=lambda event: (event.date_time, event.id))
+
+    total = len(ranked)
+    offset = (page - 1) * page_size
+    page_events = ranked[offset : offset + page_size]
+
+    seat_map_ids = [event.id for event in page_events if event.has_seat_map]
+    for event_id in seat_map_ids:
+        release_expired_holds(db, event_id)
+    summaries = _tier_summaries_for_events(db, seat_map_ids)
+    return (
+        [_event_out(db, event, summaries.get(event.id, [])) for event in page_events],
+        total,
+    )
+
+
+def update_event(db: Session, event_id: int, payload: EventUpdate) -> EventOut:
+    """Apply a partial admin edit and return the refreshed event."""
+    event = db.get(Event, event_id)
+    if event is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
+
+    changes = payload.model_dump(exclude_unset=True)
+    if (
+        "capacity" in changes
+        and event.has_seat_map
+        and changes["capacity"] != event.capacity
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="capacity is derived from the seat layout for this event",
+        )
+
+    for field_name in ("title", "description", "venue"):
+        value = changes.get(field_name)
+        if isinstance(value, str):
+            changes[field_name] = value.strip()
+
+    try:
+        for field_name, value in changes.items():
+            setattr(event, field_name, value)
+        db.commit()
+        db.refresh(event)
+        return _event_out(db, event)
+    except Exception:
+        db.rollback()
+        raise
 
 
 def _seat_map_event(db: Session, event_id: int) -> Event:

@@ -1,5 +1,6 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import date
 import hashlib
 import io
 import logging
@@ -20,9 +21,11 @@ from .schemas import (
     ConfirmHoldOut,
     EventCreate,
     EventOut,
+    EventSearchResponse,
     EventStatsOut,
     EventSuggestion,
     EventSuggestionOut,
+    EventUpdate,
     EventWaitlistIn,
     GateCreate,
     GateOut,
@@ -74,6 +77,8 @@ from .services import (
     list_events,
     record_scan,
     revoke_ticket,
+    search_events,
+    update_event,
 )
 from .google_auth import verify_google_id_token
 
@@ -155,6 +160,28 @@ def list_events_endpoint(db: Session = Depends(get_db)) -> list[EventOut]:
     return list_events(db)
 
 
+@app.get("/events/search", response_model=EventSearchResponse)
+def search_events_endpoint(
+    q: str = "",
+    city: str | None = None,
+    category: str | None = None,
+    event_date: date | None = Query(default=None, alias="date"),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=6, ge=1, le=50),
+    db: Session = Depends(get_db),
+) -> EventSearchResponse:
+    items, total = search_events(
+        db,
+        q=q,
+        city=city,
+        category=category,
+        event_date=event_date,
+        page=page,
+        page_size=page_size,
+    )
+    return EventSearchResponse(items=items, total=total, page=page, page_size=page_size)
+
+
 @app.post("/events", response_model=EventOut, status_code=status.HTTP_201_CREATED)
 def create_event_endpoint(
     payload: EventCreate,
@@ -162,6 +189,16 @@ def create_event_endpoint(
     db: Session = Depends(get_db),
 ) -> EventOut:
     return create_event(db, payload)
+
+
+@app.patch("/events/{event_id}", response_model=EventOut)
+def update_event_endpoint(
+    event_id: int,
+    payload: EventUpdate,
+    _: User = Depends(require_roles("admin")),
+    db: Session = Depends(get_db),
+) -> EventOut:
+    return update_event(db, event_id, payload)
 
 
 @app.get("/events/{event_id}/seats", response_model=SeatMapOut)

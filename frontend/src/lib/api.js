@@ -91,6 +91,29 @@ export function getEvents() {
 }
 
 /**
+ * The fuzzy catalog search. All parameters are optional; the backend only
+ * includes events that score above zero for the given query, so an empty query
+ * with filters has to be sent as missing params rather than empty strings.
+ */
+export function searchEvents(params = {}) {
+  const query = new URLSearchParams();
+  if (params.q) query.set("q", params.q);
+  if (params.city) query.set("city", params.city);
+  if (params.category) query.set("category", params.category);
+  if (params.page) query.set("page", String(params.page));
+  if (params.page_size) query.set("page_size", String(params.page_size));
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return request(`/events/search${suffix}`);
+}
+
+export function updateEvent(eventId, payload) {
+  return request(`/events/${eventId}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
+/**
  * The seat map for one event. `signal` lets the seat page abort a poll that is
  * still in flight when the tab is hidden or the page is left.
  */

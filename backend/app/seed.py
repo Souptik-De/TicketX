@@ -27,6 +27,9 @@ def seed_reference_data(db: Session) -> None:
                 date_time=datetime.now(UTC).replace(tzinfo=None) + timedelta(days=14),
                 venue="Main Auditorium",
                 capacity=500,
+                artist="Campus Collective",
+                city="Kolkata",
+                category="festival",
             )
         )
         db.flush()
@@ -98,7 +101,7 @@ def demo_attendee_campus(tag: str) -> str:
     return f"{DEMO_CAMPUS_PREFIX}{tag}"
 
 
-# (title, description, venue, capacity, days_from_now)
+# (title, description, venue, capacity, days_from_now, artist, city, category)
 DEMO_EVENTS = [
     (
         "Robotics Workshop",
@@ -106,6 +109,9 @@ DEMO_EVENTS = [
         "Innovation Hall",
         40,
         12,
+        "Circuitry Club",
+        "Kolkata",
+        "workshop",
     ),
     (
         "Hackathon Weekend",
@@ -113,6 +119,9 @@ DEMO_EVENTS = [
         "Innovation Hall",
         60,
         19,
+        "Coding Guild",
+        "Kolkata",
+        "hackathon",
     ),
     (
         "Startup Bootcamp Demo Day",
@@ -120,6 +129,9 @@ DEMO_EVENTS = [
         "Main Auditorium",
         80,
         26,
+        "Founders Collective",
+        "Bengaluru",
+        "business",
     ),
     (
         "Poetry Slam",
@@ -127,6 +139,9 @@ DEMO_EVENTS = [
         "Literature Centre",
         50,
         33,
+        "Verse Society",
+        "Kolkata",
+        "literature",
     ),
     (
         "Astronomy Night",
@@ -134,6 +149,9 @@ DEMO_EVENTS = [
         "Observatory Deck",
         45,
         40,
+        "Stargazers",
+        "Kolkata",
+        "science",
     ),
     (
         "Neon Nights Showcase",
@@ -141,6 +159,9 @@ DEMO_EVENTS = [
         "Main Auditorium",
         2,
         47,
+        "Neon Pulse",
+        "Mumbai",
+        "music",
     ),
 ]
 
@@ -277,6 +298,9 @@ def seed_stats_showcase(db: Session, now) -> dict:
         date_time=now + timedelta(days=SHOWCASE_DAYS_FROM_NOW),
         venue=SHOWCASE_VENUE,
         capacity=SHOWCASE_CAPACITY,
+        artist="Freshers Collective",
+        city="Kolkata",
+        category="music",
     )
     db.add(event)
     db.flush()
@@ -340,13 +364,16 @@ def seed_demo_data(db: Session, *, force: bool = False) -> dict:
     now = datetime.now(UTC).replace(tzinfo=None)
 
     events: dict[str, Event] = {}
-    for title, description, venue, capacity, days in DEMO_EVENTS:
+    for title, description, venue, capacity, days, artist, city, category in DEMO_EVENTS:
         event = Event(
             title=title,
             description=description,
             date_time=now + timedelta(days=days),
             venue=venue,
             capacity=capacity,
+            artist=artist,
+            city=city,
+            category=category,
         )
         db.add(event)
         events[title] = event

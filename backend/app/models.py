@@ -41,10 +41,19 @@ class Event(Base):
     description: Mapped[str] = mapped_column(String(600), default="", nullable=False)
     date_time: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     venue: Mapped[str] = mapped_column(String(160), nullable=False)
+    artist: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    city: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    category: Mapped[str | None] = mapped_column(String(80), nullable=True)
     capacity: Mapped[int] = mapped_column(Integer, nullable=False)
     # Legacy events sell numbered tickets against ``capacity``. Seat-map events
     # generate a Seat row for every physical seat instead.
     has_seat_map: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        server_default=false(),
+        nullable=False,
+    )
+    is_cancelled: Mapped[bool] = mapped_column(
         Boolean,
         default=False,
         server_default=false(),

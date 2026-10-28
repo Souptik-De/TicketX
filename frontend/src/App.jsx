@@ -762,6 +762,9 @@ function App() {
             setEvents((current) => [...current, event].sort((left, right) => left.date_time.localeCompare(right.date_time)));
             setSelectedEventId(event.id);
           }}
+          onEventUpdated={(event) => {
+            setEvents((current) => current.map((item) => (item.id === event.id ? event : item)));
+          }}
           onGateCreated={() => refreshDirectory()}
           onEventDeleted={(eventId) => {
             setEvents((current) => current.filter((e) => e.id !== eventId));
