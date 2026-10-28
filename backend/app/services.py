@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session, joinedload, subqueryload
 from .config import MAX_SEATS_PER_BOOKING, get_seat_hold_seconds
 from .models import Attendee, Event, Gate, Scan, Seat, SeatHold, Ticket, User, Volunteer, WaitlistEntry
 from .schemas import (
+    EventFacetsOut,
     AttendeeOut,
     ConfirmHoldOut,
     EventCreate,
@@ -308,6 +309,29 @@ def _normalise_search_text(value: str) -> str:
     return " ".join(value.casefold().split())
 
 
+_CATEGORY_ALIASES: dict[str, set[str]] = {
+    "music": {"music", "concert"},
+    "concert": {"concert", "music"},
+    "literature": {"literature", "literary"},
+    "literary": {"literary", "literature"},
+    "tech": {"tech", "technology"},
+    "technology": {"technology", "tech"},
+}
+
+_CITY_ALIASES: dict[str, set[str]] = {
+    "bangalore": {"bangalore", "bengaluru"},
+    "bengaluru": {"bengaluru", "bangalore"},
+}
+
+
+def _metadata_match_targets(value: str, aliases: dict[str, set[str]]) -> set[str]:
+    """Exact, normalized match targets plus registered aliases for the value."""
+    normalized = _normalise_search_text(value)
+    targets = {normalized}
+    targets.update(aliases.get(normalized, set()))
+    return targets
+
+
 def _match_score(query: str, candidate: str) -> float:
     """Score one field against the query, from exact down to a typo match."""
     if not candidate:
@@ -365,13 +389,15 @@ def search_events(
         .options(subqueryload(Event.tickets))
     )
 
-    city_filter = _normalise_search_text(city) if city else ""
-    if city_filter:
-        query = query.filter(func.lower(Event.city) == city_filter)
+    city_targets = _metadata_match_targets(city, _CITY_ALIASES) if city else set()
+    if city_targets:
+        query = query.filter(func.lower(Event.city).in_(city_targets))
 
-    category_filter = _normalise_search_text(category) if category else ""
-    if category_filter:
-        query = query.filter(func.lower(Event.category) == category_filter)
+    category_targets = (
+        _metadata_match_targets(category, _CATEGORY_ALIASES) if category else set()
+    )
+    if category_targets:
+        query = query.filter(func.lower(Event.category).in_(category_targets))
 
     if event_date is not None:
         start = datetime.combine(event_date, datetime.min.time())
@@ -405,6 +431,25 @@ def search_events(
         [_event_out(db, event, summaries.get(event.id, [])) for event in page_events],
         total,
     )
+
+
+def get_event_facets(db: Session) -> EventFacetsOut:
+    """Distinct non-empty categories and cities for the catalog dropdowns."""
+    category_rows = (
+        db.query(Event.category)
+        .filter(Event.category.isnot(None))
+        .distinct()
+        .all()
+    )
+    city_rows = (
+        db.query(Event.city)
+        .filter(Event.city.isnot(None))
+        .distinct()
+        .all()
+    )
+    categories = sorted({row[0] for row in category_rows if row[0]})
+    cities = sorted({row[0] for row in city_rows if row[0]})
+    return EventFacetsOut(categories=categories, cities=cities)
 
 
 def update_event(db: Session, event_id: int, payload: EventUpdate) -> EventOut:

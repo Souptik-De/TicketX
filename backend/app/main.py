@@ -20,6 +20,7 @@ from .schemas import (
     ConfirmHoldIn,
     ConfirmHoldOut,
     EventCreate,
+    EventFacetsOut,
     EventOut,
     EventSearchResponse,
     EventStatsOut,
@@ -63,6 +64,7 @@ from .services import (
     create_event,
     create_gate,
     create_hold,
+    get_event_facets,
     get_event_stats,
     get_gate_status,
     get_hold,
@@ -180,6 +182,11 @@ def search_events_endpoint(
         page_size=page_size,
     )
     return EventSearchResponse(items=items, total=total, page=page, page_size=page_size)
+
+
+@app.get("/events/facets", response_model=EventFacetsOut)
+def event_facets_endpoint(db: Session = Depends(get_db)) -> EventFacetsOut:
+    return get_event_facets(db)
 
 
 @app.post("/events", response_model=EventOut, status_code=status.HTTP_201_CREATED)

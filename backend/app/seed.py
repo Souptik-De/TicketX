@@ -62,6 +62,7 @@ def seed_reference_data(db: Session) -> None:
     else:
         db.query(Gate).filter(Gate.event_id.is_(None)).update({"event_id": event.id if event else None})
 
+    backfill_demo_metadata(db)
     db.commit()
 
 
@@ -96,9 +97,36 @@ DEMO_MARKER_TITLE = "Robotics Workshop"
 #: without guessing: it can delete demo rows while leaving real ones alone.
 DEMO_CAMPUS_PREFIX = "DEMO-"
 
+#: Known demo titles with their canonical city/category. Used only to repair
+#: rows inserted before metadata columns were populated: any field that already
+#: has a value is left untouched.
+DEMO_TITLE_METADATA: dict[str, tuple[str, str]] = {
+    "Techno Cultural Fest 2026": ("Kolkata", "festival"),
+    "Robotics Workshop": ("Kolkata", "workshop"),
+    "Hackathon Weekend": ("Kolkata", "hackathon"),
+    "Startup Bootcamp Demo Day": ("Bengaluru", "business"),
+    "Poetry Slam": ("Kolkata", "literature"),
+    "Astronomy Night": ("Kolkata", "science"),
+    "Neon Nights Showcase": ("Mumbai", "music"),
+}
+
 
 def demo_attendee_campus(tag: str) -> str:
     return f"{DEMO_CAMPUS_PREFIX}{tag}"
+
+
+def backfill_demo_metadata(db: Session) -> None:
+    """Fill missing city/category on known demo titles without touching filled rows."""
+    for event in db.query(Event).all():
+        key = (event.title or "").strip()
+        metadata = DEMO_TITLE_METADATA.get(key)
+        if not metadata:
+            continue
+        city, category = metadata
+        if not event.city:
+            event.city = city
+        if not event.category:
+            event.category = category
 
 
 # (title, description, venue, capacity, days_from_now, artist, city, category)

@@ -85,6 +85,11 @@ class EventSearchResponse(BaseModel):
     page_size: int
 
 
+class EventFacetsOut(BaseModel):
+    categories: list[str] = []
+    cities: list[str] = []
+
+
 class RowIn(BaseModel):
     label: str = Field(min_length=1, max_length=24)
     blocks: list[Annotated[int, Field(strict=True, ge=1)]] = Field(min_length=1)
