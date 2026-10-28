@@ -19,7 +19,7 @@ from backend.app.database import Base, SessionLocal, engine
 from backend.app.main import app
 from backend.app.models import Attendee, Event, Scan, Seat, SeatHold, Ticket, User, Volunteer, WaitlistEntry
 from backend.app.security import ticket_id_from_signature
-from backend.app.seed import seed_reference_data
+from backend.app.seed import backfill_demo_metadata, seed_reference_data
 from backend.app.services import release_expired_holds
 
 
@@ -3256,6 +3256,95 @@ def test_search_handles_odd_query_inputs_and_filters() -> None:
     last_page = _search(client, page=99)
     assert last_page["items"] == []
     assert last_page["total"] == 3
+
+
+def test_search_category_and_city_match_aliases() -> None:
+    reset_database()
+    client = TestClient(app)
+    admin_headers = auth_headers(client, "admin", "admin123")
+
+    bengaluru = _create_event(
+        client,
+        admin_headers,
+        "Stadium Night",
+        days_from_now=6,
+        artist="The Weeknd",
+        city="Bengaluru",
+        category="Concert",
+        capacity=300,
+    )
+    _create_event(
+        client,
+        admin_headers,
+        "Robotics Lab",
+        days_from_now=7,
+        artist="Circuitry Club",
+        city="Kolkata",
+        category="Technology",
+        capacity=40,
+    )
+
+    # Normalised aliases: "music" also matches a stored "Concert".
+    assert [item["id"] for item in _search(client, category="music")["items"]] == [
+        bengaluru["id"]
+    ]
+    # "bangalore" matches the stored "Bengaluru" (and vice versa).
+    assert [item["id"] for item in _search(client, city="bangalore")["items"]] == [
+        bengaluru["id"]
+    ]
+    assert [item["id"] for item in _search(client, city="Bengaluru")["items"]] == [
+        bengaluru["id"]
+    ]
+    # Exact still governs outside the alias map: "technology" is not "music".
+    assert _search(client, city="bangalore", category="technology")["total"] == 0
+
+
+def test_facets_exposes_distinct_categories_and_cities() -> None:
+    reset_database()
+    client = TestClient(app)
+    admin_headers = auth_headers(client, "admin", "admin123")
+
+    _create_event(client, admin_headers, "Music Night", days_from_now=2, city="Bengaluru", category="Concert")
+    _create_event(client, admin_headers, "Lab", days_from_now=3, city="Kolkata", category="Workshop")
+    _create_event(client, admin_headers, "No Metadata", days_from_now=4)
+
+    response = client.get("/events/facets")
+    assert response.status_code == 200, response.text
+    data = response.json()
+    # Plus the seeded "Techno Cultural Fest 2026" row.
+    assert set(data["categories"]) == {"Concert", "Workshop", "festival"}
+    assert set(data["cities"]) == {"Bengaluru", "Kolkata"}
+
+
+def test_backfill_fills_only_missing_metadata() -> None:
+    reset_database()
+    db = SessionLocal()
+    try:
+        db.add(
+            Event(
+                title="Robotics Workshop",
+                date_time=datetime.now(UTC).replace(tzinfo=None) + timedelta(days=3),
+                venue="Hall",
+                capacity=50,
+            )
+        )
+        db.flush()
+        backfill_demo_metadata(db)
+
+        filled = db.query(Event).filter(Event.title == "Robotics Workshop").one()
+        assert filled.city == "Kolkata"
+        assert filled.category == "workshop"
+
+        # Already-filled values are never overwritten.
+        kept = db.query(Event).filter(Event.title == "Techno Cultural Fest 2026").one()
+        kept.city = "Pune"
+        kept.category = None
+        backfill_demo_metadata(db)
+        assert kept.city == "Pune"
+        assert kept.category == "festival"
+        db.rollback()
+    finally:
+        db.close()
 
 
 def test_admin_can_update_event_metadata_and_clear_optional_fields() -> None:

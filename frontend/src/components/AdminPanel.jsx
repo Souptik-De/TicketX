@@ -1,21 +1,10 @@
 import { useEffect, useState } from "react";
 import { Armchair, Ban, CalendarPlus, DoorOpen, MapPin, Pencil, Plus, RotateCcw, UsersRound, Trash2 } from "lucide-react";
 
-import { createEvent, createGate, deleteEvent, revokeTicket, updateEvent } from "../lib/api";
+import { createEvent, createGate, deleteEvent, getEventFacets, revokeTicket, updateEvent } from "../lib/api";
 import { emptyLayout, serializeLayout, validateLayout } from "../lib/layoutToSeats";
 import { EventStats } from "./EventStats";
 import { SeatLayoutBuilder } from "./SeatLayoutBuilder";
-
-const CATEGORIES = [
-  "concert",
-  "festival",
-  "workshop",
-  "sports",
-  "cultural",
-  "comedy",
-  "literary",
-  "tech",
-];
 
 export function AdminPanel({ events, gates, selectedEventId, onEventChange, onEventCreated, onEventUpdated, onGateCreated, onEventDeleted }) {
   const [title, setTitle] = useState("Freshers Night 2026");
@@ -35,6 +24,7 @@ export function AdminPanel({ events, gates, selectedEventId, onEventChange, onEv
   const [artist, setArtist] = useState("");
   const [city, setCity] = useState("");
   const [category, setCategory] = useState("");
+  const [categories, setCategories] = useState([]);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [eventMessage, setEventMessage] = useState("");
@@ -69,6 +59,22 @@ export function AdminPanel({ events, gates, selectedEventId, onEventChange, onEv
     setEditCategory(selectedEvent.category ?? "");
   }, [selectedEvent?.id]);
 
+  // Category suggestions come from the catalog facets so admins reuse the same
+  // values attendees can filter by, while free text is still accepted.
+  useEffect(() => {
+    let cancelled = false;
+    getEventFacets()
+      .then((data) => {
+        if (!cancelled) setCategories(data.categories ?? []);
+      })
+      .catch(() => {
+        // Facets are a nicety: fall back to a plain free-text field.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const layoutValidation = validateLayout(seatLayout);
   const seatMapInvalid = eventMode === "map" && !layoutValidation.valid;
 
@@ -99,7 +105,7 @@ export function AdminPanel({ events, gates, selectedEventId, onEventChange, onEv
       };
       if (artist.trim()) payload.artist = artist.trim();
       if (city.trim()) payload.city = city.trim();
-      if (category) payload.category = category;
+      if (category.trim()) payload.category = category.trim();
       if (eventMode === "map") {
         // The server derives capacity from the sellable seats, so sending one
         // would just be a second, conflicting source of truth.
@@ -186,7 +192,7 @@ export function AdminPanel({ events, gates, selectedEventId, onEventChange, onEv
         title: editTitle.trim(),
         artist: editArtist.trim() || null,
         city: editCity.trim() || null,
-        category: editCategory || null,
+        category: editCategory.trim() || null,
       });
       onEventUpdated(updated);
       setUpdateMessage(`Details for ${updated.title} saved.`);
@@ -258,14 +264,18 @@ export function AdminPanel({ events, gates, selectedEventId, onEventChange, onEv
             </label>
             <label>
               Category
-              <select value={category} onChange={(event) => setCategory(event.target.value)}>
-                <option value="">Optional</option>
-                {CATEGORIES.map((name) => (
-                  <option key={name} value={name}>
-                    {name}
-                  </option>
+              <input
+                list="event-category"
+                value={category}
+                onChange={(event) => setCategory(event.target.value)}
+                maxLength={80}
+                placeholder="Optional"
+              />
+              <datalist id="event-category">
+                {categories.map((name) => (
+                  <option key={name} value={name} />
                 ))}
-              </select>
+              </datalist>
             </label>
             {eventMode === "simple" && (
               <label>
@@ -331,14 +341,18 @@ export function AdminPanel({ events, gates, selectedEventId, onEventChange, onEv
               </label>
               <label>
                 Category
-                <select value={editCategory} onChange={(event) => setEditCategory(event.target.value)}>
-                  <option value="">Uncategorised</option>
-                  {CATEGORIES.map((name) => (
-                    <option key={name} value={name}>
-                      {name}
-                    </option>
+                <input
+                  list="edit-event-category"
+                  value={editCategory}
+                  onChange={(event) => setEditCategory(event.target.value)}
+                  maxLength={80}
+                  placeholder="Searchable — leave empty to clear"
+                />
+                <datalist id="edit-event-category">
+                  {categories.map((name) => (
+                    <option key={name} value={name} />
                   ))}
-                </select>
+                </datalist>
               </label>
 
               {updateError && (

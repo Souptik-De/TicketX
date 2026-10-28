@@ -35,6 +35,10 @@ export function EventBrowser({ events, isLoading, error, myTickets, selectedEven
         setQuery={search.setQuery}
         category={search.category}
         setCategory={search.setCategory}
+        city={search.city}
+        setCity={search.setCity}
+        categories={search.categories}
+        cities={search.cities}
         isSearching={search.isSearching}
       />
 

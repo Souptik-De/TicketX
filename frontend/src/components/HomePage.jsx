@@ -90,6 +90,10 @@ export function HomePage({ events, isLoading, error, sessionUser, theme, onTheme
           setQuery={search.setQuery}
           category={search.category}
           setCategory={search.setCategory}
+          city={search.city}
+          setCity={search.setCity}
+          categories={search.categories}
+          cities={search.cities}
           isSearching={search.isSearching}
         />
 

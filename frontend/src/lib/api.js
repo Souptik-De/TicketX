@@ -90,6 +90,10 @@ export function getEvents() {
   return request("/events");
 }
 
+export function getEventFacets() {
+  return request("/events/facets");
+}
+
 /**
  * The fuzzy catalog search. All parameters are optional; the backend only
  * includes events that score above zero for the given query, so an empty query
@@ -100,6 +104,7 @@ export function searchEvents(params = {}) {
   if (params.q) query.set("q", params.q);
   if (params.city) query.set("city", params.city);
   if (params.category) query.set("category", params.category);
+  if (params.date) query.set("date", params.date);
   if (params.page) query.set("page", String(params.page));
   if (params.page_size) query.set("page_size", String(params.page_size));
   const suffix = query.toString() ? `?${query.toString()}` : "";
