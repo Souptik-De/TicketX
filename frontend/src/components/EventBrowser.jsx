@@ -46,10 +46,10 @@ export function EventBrowser({ events, isLoading, error, myTickets, selectedEven
       )}
 
       {error && <div className="banner-error">{error}</div>}
-      {isLoading && <div className="catalog-empty">Loading upcoming events...</div>}
+      {isLoading && <div className="catalog-empty">Loading events...</div>}
       {!isLoading && !error && catalogEvents.length === 0 && (
         <div className="catalog-empty">
-          {search.hasQuery && !search.isSearching ? "No events match your search." : "No events are accepting tickets right now."}
+          {search.hasQuery && !search.isSearching ? "No events match your search." : "No events yet."}
         </div>
       )}
 

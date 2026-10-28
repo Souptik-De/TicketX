@@ -316,10 +316,10 @@ def _match_score(query: str, candidate: str) -> float:
         return 1.0
     if candidate.startswith(query):
         return 0.85
-    if query in candidate:
-        return 0.7
     tokens = candidate.split()
     if any(token.startswith(query) for token in tokens):
+        return 0.7
+    if query in candidate:
         return 0.55
     ratio = difflib.SequenceMatcher(None, query, candidate).ratio()
     token_ratio = max(
@@ -359,13 +359,9 @@ def search_events(
     page: int = 1,
     page_size: int = 6,
 ) -> tuple[list[EventOut], int]:
-    """Public search over upcoming events, tolerant of partial words and typos."""
+    """Public search over the whole catalog, tolerant of partial words and typos."""
     query = (
         db.query(Event)
-        .filter(
-            Event.date_time >= _utcnow(),
-            Event.is_cancelled.is_(False),
-        )
         .options(subqueryload(Event.tickets))
     )
 

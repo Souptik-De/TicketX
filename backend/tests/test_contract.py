@@ -3183,7 +3183,7 @@ def test_search_paginates_without_duplicates() -> None:
     assert client.get("/events/search", params={"page": 0}).status_code == 422
 
 
-def test_search_hides_past_and_cancelled_events() -> None:
+def test_search_includes_past_and_cancelled_events() -> None:
     reset_database()
     client = TestClient(app)
     admin_headers = auth_headers(client, "admin", "admin123")
@@ -3196,7 +3196,8 @@ def test_search_hides_past_and_cancelled_events() -> None:
     )
 
     body = _search(client, q="gathering")
-    assert [item["id"] for item in body["items"]] == [future["id"]]
+    assert body["total"] == 2
+    assert {item["id"] for item in body["items"]} == {past["id"], future["id"]}
     catalogue = client.get("/events")
     assert catalogue.status_code == 200
     assert past["id"] in {item["id"] for item in catalogue.json()}
@@ -3206,13 +3207,30 @@ def test_search_hides_past_and_cancelled_events() -> None:
     )
     assert cancelled.status_code == 200, cancelled.text
     assert cancelled.json()["is_cancelled"] is True
-    assert _search(client, q="gathering")["total"] == 0
+    assert _search(client, q="gathering")["total"] == 2
 
     restored = client.patch(
         f"/events/{future['id']}", json={"is_cancelled": False}, headers=admin_headers
     )
     assert restored.status_code == 200, restored.text
-    assert [item["id"] for item in _search(client, q="gathering")["items"]] == [future["id"]]
+    assert {item["id"] for item in _search(client, q="gathering")["items"]} == {past["id"], future["id"]}
+
+
+def test_search_ranks_token_prefix_above_substring() -> None:
+    reset_database()
+    client = TestClient(app)
+    admin_headers = auth_headers(client, "admin", "admin123")
+
+    robotics = _create_event(
+        client, admin_headers, "Robotics Workshop", days_from_now=-18
+    )
+    astronomy = _create_event(
+        client, admin_headers, "Astronomy Night", days_from_now=10
+    )
+
+    body = _search(client, q="ro")
+    assert body["total"] == 2
+    assert [item["id"] for item in body["items"]] == [robotics["id"], astronomy["id"]]
 
 
 def test_search_handles_odd_query_inputs_and_filters() -> None:

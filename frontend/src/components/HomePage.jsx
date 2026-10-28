@@ -79,8 +79,8 @@ export function HomePage({ events, isLoading, error, sessionUser, theme, onTheme
       <section className="event-catalog" id="events">
         <div className="catalog-heading">
           <div>
-            <p className="eyebrow">Now booking</p>
-            <h2>Upcoming events</h2>
+            <p className="eyebrow">Event catalog</p>
+            <h2>All events</h2>
           </div>
           <p>Choose an event to see availability, seating tiers, and reserve a QR ticket.</p>
         </div>
@@ -101,10 +101,10 @@ export function HomePage({ events, isLoading, error, sessionUser, theme, onTheme
         )}
 
         {error && <div className="banner-error">{error}</div>}
-        {isLoading && <div className="catalog-empty">Loading upcoming events...</div>}
+        {isLoading && <div className="catalog-empty">Loading events...</div>}
         {!isLoading && !error && catalogEvents.length === 0 && (
           <div className="catalog-empty">
-            {search.hasQuery && !search.isSearching ? "No events match your search." : "No events are accepting tickets right now."}
+            {search.hasQuery && !search.isSearching ? "No events match your search." : "No events yet."}
           </div>
         )}
 
